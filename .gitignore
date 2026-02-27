@@ -1,0 +1,16 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Comfy Output
+ui/comfy/output/*
+!ui/comfy/output/.gitkeep
+
+# Project Config
+projects/*
+!projects/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
