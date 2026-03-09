@@ -3,12 +3,12 @@ const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 const multer = require('multer');
-const { spawn, exec } = require('child_process');
+const { spawn } = require('child_process');
 
 const app = express();
 const PORT = 3000;
 
-// Configure paths
+// Configure paths — resolve to workspace/projects regardless of cwd
 const PROJECTS_DIR = path.resolve(__dirname, '../../../projects');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -57,7 +57,36 @@ app.get('/api/project/:name', (req, res) => {
   }
 });
 
-// 3. Save Project Data
+// 3. Create New Project (MUST be before /:name to avoid wildcard collision)
+app.post('/api/project/create', (req, res) => {
+  const name = req.body.name;
+  if (!name || name.length < 3) {
+    return res.status(400).json({ error: 'Project name required (min 3 chars)' });
+  }
+
+  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const projectDir = path.join(PROJECTS_DIR, safeName);
+
+  if (fs.existsSync(projectDir)) {
+    return res.status(400).json({ error: 'Project already exists' });
+  }
+
+  try {
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const initialShotList = { concept: safeName.replace(/_/g, ' '), shots: [] };
+    fs.writeFileSync(path.join(projectDir, 'shot_list.json'), JSON.stringify(initialShotList, null, 2));
+
+    const initialConfig = { comfy_url: "localhost:8000", preset: "ascension" };
+    fs.writeFileSync(path.join(projectDir, 'config.json'), JSON.stringify(initialConfig, null, 2));
+
+    res.json({ success: true, name: safeName });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Save Project Data
 app.post('/api/project/:name', (req, res) => {
   const projectName = req.params.name;
   const filePath = path.join(PROJECTS_DIR, projectName, 'shot_list.json');
@@ -83,7 +112,6 @@ const upload = multer({
     },
     filename: (req, file, cb) => {
       const ext = path.extname(file.originalname);
-      // If single upload, we have shotId. If bulk, we don't.
       const shotId = req.params.shotId || 'bulk_temp';
       const timestamp = Date.now();
       cb(null, `Shot_${shotId}_uploaded_${timestamp}${ext}`);
@@ -109,23 +137,18 @@ app.post('/api/project/:name/upload/:shotId', upload.single('image'), (req, res)
       return res.status(404).json({ error: 'Shot not found' });
     }
 
-    // Store absolute path
     projectData.shots[shotIndex].image_file = req.file.path;
-    
-    // Save updated JSON
     fs.writeFileSync(shotListPath, JSON.stringify(projectData, null, 2));
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       filePath: req.file.path,
-      // Relative URL for frontend
       url: `/projects-static/${projectName}/images/${req.file.filename}`
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-
 
 // 5. Bulk Upload (New Shots)
 const bulkUpload = upload.array('images');
@@ -142,8 +165,7 @@ app.post('/api/project/:name/bulk-upload', (req, res) => {
 
     try {
       let projectData = JSON.parse(fs.readFileSync(shotListPath, 'utf8'));
-      
-      // Calculate next ID
+
       let maxId = 0;
       if (projectData.shots && projectData.shots.length > 0) {
         maxId = Math.max(...projectData.shots.map(s => s.id));
@@ -153,38 +175,32 @@ app.post('/api/project/:name/bulk-upload', (req, res) => {
 
       req.files.forEach((file, index) => {
         const newId = maxId + 1 + index;
-        
-        // Rename file to standard convention
         const dir = path.dirname(file.path);
         const ext = path.extname(file.originalname);
         const timestamp = Date.now();
         const newFilename = `Shot_${newId}_bulk_${timestamp}${ext}`;
         const newPath = path.join(dir, newFilename);
-        
+
         fs.renameSync(file.path, newPath);
 
         const shot = {
           id: newId,
           name: `Imported Shot ${newId}`,
-          duration: 4, 
+          duration: 4,
           image_prompt: "",
           video_prompt: "",
           status: "pending",
           image_file: newPath,
           video_file: ""
         };
-        
+
         projectData.shots.push(shot);
         newShots.push(shot);
       });
 
-      // Save updated JSON
       fs.writeFileSync(shotListPath, JSON.stringify(projectData, null, 2));
 
-      res.json({ 
-        success: true, 
-        newShots: newShots
-      });
+      res.json({ success: true, newShots: newShots });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -200,10 +216,10 @@ app.post('/api/project/:name/export', (req, res) => {
 
   try {
     const projectData = JSON.parse(fs.readFileSync(shotListPath, 'utf8'));
-    
+
     let mdContent = `# ${projectData.concept || projectName}\n\n`;
     mdContent += `Generated: ${new Date().toISOString()}\n\n`;
-    
+
     projectData.shots.forEach(shot => {
       mdContent += `## Shot ${shot.id}: ${shot.name}\n`;
       mdContent += `- **Status**: ${shot.status}\n`;
@@ -222,72 +238,39 @@ app.post('/api/project/:name/export', (req, res) => {
   }
 });
 
-// 6.5. Create New Project
-app.post('/api/project/create', (req, res) => {
-    const name = req.body.name;
-    if (!name || name.length < 3) {
-        return res.status(400).json({ error: 'Project name required (min 3 chars)' });
-    }
+// (Create New Project moved above /:name routes — see top of route section)
 
-    const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const projectDir = path.join(PROJECTS_DIR, safeName);
+// Helper: Ollama vision analysis
+function runOllamaVision(imagePath, prompt) {
+  return new Promise((resolve, reject) => {
+    const imageBuffer = fs.readFileSync(imagePath);
+    const base64Image = imageBuffer.toString('base64');
 
-    if (fs.existsSync(projectDir)) {
-        return res.status(400).json({ error: 'Project already exists' });
-    }
+    const payload = JSON.stringify({
+      model: 'llava:13b',
+      prompt: prompt,
+      stream: false,
+      images: [base64Image]
+    });
 
-    try {
-        fs.mkdirSync(projectDir, { recursive: true });
-        
-        // Create initial files
-        const initialShotList = {
-            concept: safeName.replace(/_/g, ' '),
-            shots: []
-        };
-        fs.writeFileSync(path.join(projectDir, 'shot_list.json'), JSON.stringify(initialShotList, null, 2));
+    fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.response) resolve(data.response);
+      else reject(new Error("No response from vision model"));
+    })
+    .catch(err => reject(err));
+  });
+}
 
-        const initialConfig = {
-            comfy_url: "localhost:8188",
-            preset: "ascension"
-        };
-        fs.writeFileSync(path.join(projectDir, 'config.json'), JSON.stringify(initialConfig, null, 2));
-
-        res.json({ success: true, name: safeName });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Helper for Ollama (Text)
+// Helper: Ollama text generation
 function runOllamaText(prompt) {
   return new Promise((resolve, reject) => {
-    // Switch to Gemini for better instruction following on LTX prompts
-    const model = 'google/gemini-3-pro-preview'; 
-    console.log(`[LLM] Generating text with ${model}...`);
-    
-    // We can't use 'ollama run' for Gemini. We need to use the OpenClaw agent to call the model directly
-    // OR, since this is a server process, we might not have access to the agent's internal model tools easily.
-    // However, the user said "when I go over to gemini it generates great prompts".
-    
-    // IF this server is running inside the OpenClaw environment, it might have credentials?
-    // But wait, this is a standalone node process spawned by `console.js`.
-    // It likely DOES NOT have access to the `gemini` model via `ollama` command.
-    
-    // Re-reading the code: it uses `spawn('ollama', ['run', model]...`
-    // So it depends on what models are available in Ollama.
-    // The user said "when I go over to gemini", implying they might be doing it manually or in the main chat.
-    
-    // If I want to fix this within the *local* tool, I have two options:
-    // 1. Improve the prompt for Mixtral (which IS available in Ollama).
-    // 2. See if I can route the request to a better local model if available (e.g. qwen3-coder:30b might be smarter?).
-    
-    // The user specifically complained about Mixtral.
-    // "the LTX prompts we're getting back from mixtral are not following the prompt guide"
-    
-    // Let's try to improve the prompt for Mixtral first, adhering strictly to the LTX guide.
-    // If that fails, I might need to suggest a way to use the main agent for this, but that's complex for a detached server.
-    
-    const proc = spawn('ollama', ['run', 'mixtral:8x7b'], {
+    const proc = spawn('ollama', ['run', 'qwen3:8b'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: true
     });
@@ -297,78 +280,28 @@ function runOllamaText(prompt) {
 
     proc.stdout.on('data', (chunk) => { data += chunk.toString(); });
     proc.stderr.on('data', (chunk) => { error += chunk.toString(); });
-    
+
     proc.stdin.write(prompt);
     proc.stdin.end();
 
     proc.on('close', (code) => {
-      if (code !== 0) {
-        console.error(`Ollama Text Error: ${error}`);
-        if (data.trim().length === 0) return reject(new Error(error));
-      }
+      if (code !== 0 && data.trim().length === 0) return reject(new Error(error));
       resolve(data);
     });
   });
 }
 
-// Helper for Ollama (Vision)
-function runOllamaVision(imagePath, prompt) {
-  return new Promise((resolve, reject) => {
-    // We'll use llava for vision
-    const model = 'llava:13b'; 
-    console.log(`[Ollama] Analyzing image with ${model}...`);
-    
-    // Ollama CLI accepts image path via specific flags or just pure text with some clients, 
-    // but the CLI 'run' command isn't great for images in older versions. 
-    // However, we can use the "ollama run llava 'prompt' --image path" syntax if supported,
-    // OR more reliably, we can use the API if we were using fetch, but here we are using spawn.
-    // The CLI syntax for image is often just passing the path in the prompt context? 
-    // Actually, checking docs: `ollama run llava "describe this image" /path/to/image.png` is NOT standard.
-    // Standard is: ollama run llava, then paste path? No.
-    // The reliable way via CLI is currently tricky without an interactive session.
-    
-    // BETTER APPROACH: Use `curl` to the local API which is always running if Ollama is up.
-    // This avoids the interactive CLI complexity for images.
-    
-    const imageBuffer = fs.readFileSync(imagePath);
-    const base64Image = imageBuffer.toString('base64');
-    
-    const payload = JSON.stringify({
-      model: model,
-      prompt: prompt,
-      stream: false,
-      images: [base64Image]
-    });
-    
-    // We'll use a simple node fetch-like approach using `curl` via spawn for zero-dependency 
-    // (since we didn't install axios/node-fetch and native fetch might be experimental in some node versions, 
-    // though Node 24 definitely has fetch. Let's use native fetch!)
-    
-    fetch('http://localhost:11434/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.response) resolve(data.response);
-        else reject(new Error("No response from vision model"));
-    })
-    .catch(err => reject(err));
-  });
-}
-
-// 7. Auto-Generate Prompts (AI Agent)
+// 7. Auto-Generate Prompts (AI)
 app.post('/api/project/:name/generate-prompts', async (req, res) => {
   const projectName = req.params.name;
-  const shotId = req.body.shotId; 
+  const shotId = req.body.shotId;
   const shotListPath = path.join(PROJECTS_DIR, projectName, 'shot_list.json');
 
   try {
     const projectData = JSON.parse(fs.readFileSync(shotListPath, 'utf8'));
     const concept = projectData.concept || "Cinematic Video";
 
-    const shotsToProcess = shotId 
+    const shotsToProcess = shotId
       ? projectData.shots.filter(s => s.id === parseInt(shotId))
       : projectData.shots.filter(s => !s.video_prompt || s.video_prompt.length < 5);
 
@@ -376,81 +309,49 @@ app.post('/api/project/:name/generate-prompts', async (req, res) => {
       return res.json({ success: true, message: "No shots needed updating.", updated: 0 });
     }
 
-    console.log(`Processing ${shotsToProcess.length} shots...`);
-
     for (const shot of shotsToProcess) {
       let visualContext = "";
-      
-      // Step 1: Analyze Image (if exists)
+
       if (shot.image_file && fs.existsSync(shot.image_file)) {
-          try {
-              console.log(`Analyzing image for Shot ${shot.id}...`);
-              visualContext = await runOllamaVision(shot.image_file, 
-                  "Describe this image in detail for a film director. Focus on the subject, action, lighting, and composition. Be specific.");
-              console.log(`Visual Context: ${visualContext.substring(0, 50)}...`);
-          } catch (e) {
-              console.error("Vision analysis failed:", e.message);
-              visualContext = "Image analysis failed. Base prompts on shot name.";
-          }
+        try {
+          visualContext = await runOllamaVision(shot.image_file,
+            "Describe this image in detail for a film director. Focus on the subject, action, lighting, and composition. Be specific.");
+        } catch (e) {
+          console.error("Vision analysis failed:", e.message);
+          visualContext = shot.name;
+        }
       }
 
-      // Step 2: Generate Prompts (Text)
-      // Updated Prompt based on LTX.2 Guide (2026-02-24)
-      const prompt = `
-You are an expert LTX.2 Prompt Engineer.
+      const prompt = `You are an expert Wan 2.2 video prompt engineer.
 Project Concept: "${concept}"
 Shot Name: "${shot.name}"
+Visual Analysis: "${visualContext}"
 
-Visual Analysis of Shot: "${visualContext}"
+Write a video_prompt for Wan 2.2 i2v. Rules:
+- Single flowing paragraph, 3-5 sentences
+- Start with camera movement (e.g. "Camera slowly pushes in,")
+- Describe subject motion and atmosphere
+- No internal states — use visual cues only
+- No text or logos
+- End with lighting/mood note
 
-Task:
-1. **Video Prompt** (LTX.2 Specific):
-   - CRITICAL: Write a SINGLE flowing paragraph (4-6 sentences).
-   - Start with: "Cinematic shot of [Subject]..."
-   - Include: Lighting (e.g., "volumetric lighting", "neon glow"), Texture ("sweat on skin", "rough concrete"), and Action.
-   - Describe CAMERA MOVEMENT clearly (e.g., "The camera pans left...", "Slow dolly in...").
-   - NO internal states (sadness, confusion) - use visual cues (tears, furrowed brow).
-   - NO text/logos.
+Also write an image_prompt for Flux/SDXL (static frame, detailed, cinematic).
 
-2. **Image Prompt** (Midjourney/Flux):
-   - Detailed visual description of the static frame.
-   - Include texture (8k, raw), lighting, and style keywords.
+Output ONLY valid JSON: { "image_prompt": "...", "video_prompt": "..." }`;
 
-Output ONLY valid JSON:
-{
-  "image_prompt": "...",
-  "video_prompt": "..."
-}
-`;
       try {
-        console.log(`[Prompt Gen] Prompting Mixtral for Shot ${shot.id}...`);
-        const output = await runOllamaText(prompt);
-        console.log(`[Prompt Gen] Mixtral Output (Raw):`, output.substring(0, 100) + "...");
-        
-        // Clean JSON
-        const jsonMatch = output.match(/```json\s*([\s\S]*?)\s*```/) || output.match(/```\s*([\s\S]*?)\s*```/);
-        const jsonString = jsonMatch ? jsonMatch[1] : output;
-        
-        // Aggressive cleanup: remove non-JSON preamble/postscript if regex failed
-        // Find first '{' and last '}'
-        const firstBrace = jsonString.indexOf('{');
-        const lastBrace = jsonString.lastIndexOf('}');
-        
-        let finalJsonString = jsonString;
+        const raw = await runOllamaText(prompt);
+        // Strip <think>...</think> blocks (qwen3 thinking model output)
+        const output = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        const firstBrace = output.indexOf('{');
+        const lastBrace = output.lastIndexOf('}');
         if (firstBrace !== -1 && lastBrace !== -1) {
-            finalJsonString = jsonString.substring(firstBrace, lastBrace + 1);
+          const result = JSON.parse(output.substring(firstBrace, lastBrace + 1));
+          if (result.image_prompt) shot.image_prompt = result.image_prompt;
+          if (result.video_prompt) shot.video_prompt = result.video_prompt;
         }
-
-        const cleanString = finalJsonString.replace(/\\_/g, '_').trim();
-            
-        const result = JSON.parse(cleanString);
-        console.log(`[Prompt Gen] Parsed Result:`, JSON.stringify(result, null, 2));
-        
-        if (result.image_prompt) shot.image_prompt = result.image_prompt;
-        if (result.video_prompt) shot.video_prompt = result.video_prompt;
-        
       } catch (e) {
-        console.error(`Failed generation for shot ${shot.id}`, e);
+        console.error(`Prompt gen failed for shot ${shot.id}:`, e.message);
       }
     }
 
@@ -458,12 +359,11 @@ Output ONLY valid JSON:
     res.json({ success: true, updated: shotsToProcess.length });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 8. Queue Video Generation (ComfyUI)
+// 8. Queue Video Generation (Wan 2.2 i2v)
 app.post('/api/project/:name/queue-video/:shotId', async (req, res) => {
   const projectName = req.params.name;
   const shotId = parseInt(req.params.shotId);
@@ -475,23 +375,22 @@ app.post('/api/project/:name/queue-video/:shotId', async (req, res) => {
 
     if (!shot) return res.status(404).json({ error: "Shot not found" });
     if (!shot.image_file) return res.status(400).json({ error: "No image file for shot" });
-    if (!shot.video_prompt) return res.status(400).json({ error: "No video prompt" });
 
-    // Use spawn to run animate.js in background (detached)
-    // We don't wait for it to finish because ComfyUI generation takes minutes.
-    // The UI can't hang on this request.
-    
+    // Fall back to image_prompt if video_prompt is empty
+    const prompt = (shot.video_prompt && shot.video_prompt.trim().length > 0)
+      ? shot.video_prompt
+      : shot.image_prompt || "cinematic motion, atmospheric, slow subtle movement";
+
     const scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/animate_wan.js');
-    console.log(`[Queue] Running: node ${scriptPath} "${shot.image_file}" "${shot.video_prompt}"`);
+    console.log(`[Queue Video] Shot ${shotId}: node ${scriptPath}`);
 
-    const child = spawn('node', [scriptPath, shot.image_file, shot.video_prompt], {
-        detached: true,
-        stdio: 'ignore'
+    const child = spawn('node', [scriptPath, shot.image_file, prompt], {
+      detached: true,
+      stdio: 'ignore'
     });
-    
     child.unref();
 
-    res.json({ success: true, message: "Generation started in background" });
+    res.json({ success: true, message: `Video queued for Shot ${shotId}: "${shot.name}"` });
 
   } catch (err) {
     console.error(err);
@@ -499,7 +398,7 @@ app.post('/api/project/:name/queue-video/:shotId', async (req, res) => {
   }
 });
 
-// 9. Queue Image Generation (Re-Imagine)
+// 9. Queue Image Generation (Z-Turbo)
 app.post('/api/project/:name/queue-image/:shotId', async (req, res) => {
   const projectName = req.params.name;
   const shotId = parseInt(req.params.shotId);
@@ -512,18 +411,70 @@ app.post('/api/project/:name/queue-image/:shotId', async (req, res) => {
     if (!shot) return res.status(404).json({ error: "Shot not found" });
     if (!shot.image_prompt) return res.status(400).json({ error: "No image prompt" });
 
-    const scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/generate.js');
-    console.log(`[Queue Image] Running: node ${scriptPath} "${shot.image_prompt}" --preset ascension`);
+    const scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/generate_zturbo.js');
+    console.log(`[Queue Image] Shot ${shotId}: node ${scriptPath}`);
 
     const child = spawn('node', [scriptPath, shot.image_prompt, '--preset', 'ascension'], {
-        detached: true,
-        stdio: 'ignore'
+      detached: true,
+      stdio: 'ignore'
     });
-    
     child.unref();
 
-    res.json({ success: true, message: "Image generation started" });
+    res.json({ success: true, message: `Image queued for Shot ${shotId}` });
 
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 10. List available audio tracks
+app.get('/api/tracks', (req, res) => {
+  const trackDirs = [
+    'C:\\Users\\benha\\OneDrive\\03_CREATIVE\\Music\\My Ways of Songs\\Static Weather\\tracks',
+    'C:\\Users\\benha\\OneDrive\\03_CREATIVE\\Music\\My Ways of Songs'
+  ];
+  const tracks = [];
+  trackDirs.forEach(dir => {
+    if (fs.existsSync(dir)) {
+      fs.readdirSync(dir)
+        .filter(f => f.match(/\.(wav|mp3|flac|aiff|ogg)$/i))
+        .forEach(f => tracks.push({ name: f, path: path.join(dir, f) }));
+    }
+  });
+  res.json(tracks);
+});
+
+// 11. Queue Audio Video (LTX 2.3 i2v + Audio)
+app.post('/api/project/:name/queue-audio-video/:shotId', async (req, res) => {
+  const projectName = req.params.name;
+  const shotId = parseInt(req.params.shotId);
+  const audioPath = req.body.audioPath;
+  const shotListPath = path.join(PROJECTS_DIR, projectName, 'shot_list.json');
+
+  if (!audioPath) return res.status(400).json({ error: 'No audio path provided' });
+  if (!fs.existsSync(audioPath)) return res.status(400).json({ error: `Audio file not found: ${audioPath}` });
+
+  try {
+    const projectData = JSON.parse(fs.readFileSync(shotListPath, 'utf8'));
+    const shot = projectData.shots.find(s => s.id === shotId);
+
+    if (!shot) return res.status(404).json({ error: 'Shot not found' });
+    if (!shot.image_file) return res.status(400).json({ error: 'No image file for shot' });
+
+    const prompt = (shot.video_prompt && shot.video_prompt.trim().length > 0)
+      ? shot.video_prompt
+      : shot.image_prompt || 'cinematic motion, subtle movement, atmospheric lighting';
+
+    const scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/animate_ltx23_audio.js');
+    console.log(`[Queue Audio Video] Shot ${shotId} + audio: ${path.basename(audioPath)}`);
+
+    const child = spawn('node', [scriptPath, shot.image_file, audioPath, prompt], {
+      detached: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+
+    res.json({ success: true, message: `Audio video queued for Shot ${shotId}: "${shot.name}"` });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -533,4 +484,5 @@ app.post('/api/project/:name/queue-image/:shotId', async (req, res) => {
 // Start Server
 app.listen(PORT, () => {
   console.log(`Director UI running at http://localhost:${PORT}`);
+  console.log(`Projects dir: ${PROJECTS_DIR}`);
 });

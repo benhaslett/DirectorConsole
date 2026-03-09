@@ -19,6 +19,16 @@
         <header class="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
             <h1 class="text-3xl font-bold text-emerald-400 tracking-tight">🎬 Director's Console</h1>
             <div class="flex gap-4">
+                <select x-model="videoModel" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-purple-500 text-purple-400 font-semibold">
+                    <option value="ltx">LTX (Standard)</option>
+                    <option value="wan">Wan 2.2 (5s Coherent)</option>
+                </select>
+                <select x-model="selectedAudio" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-yellow-500 text-yellow-400 font-semibold max-w-xs">
+                    <option value="">🎵 No Audio Track</option>
+                    <template x-for="track in audioTracks" :key="track.path">
+                        <option :value="track.path" x-text="track.name"></option>
+                    </template>
+                </select>
                 <select x-model="selectedProject" @change="loadProject()" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
                     <option value="">Select Project...</option>
                     <template x-for="project in projects" :key="project">
@@ -72,7 +82,7 @@
                 </div>
 
                 <!-- Notification -->
-                <div x-show="notification" x-transition class="fixed top-5 right-5 bg-emerald-600 text-white px-6 py-3 rounded shadow-lg z-50">
+                <div x-show="notification" x-transition :class="notifType === 'error' ? 'bg-red-600' : notifType === 'info' ? 'bg-blue-600 animate-pulse' : 'bg-emerald-600'" class="fixed top-5 right-5 text-white px-6 py-3 rounded shadow-lg z-50">
                     <span x-text="notification"></span>
                 </div>
 
@@ -171,10 +181,13 @@
                                            </svg>
                                        </button>
 
-                                       <button @click="queueShot(shot.id)" class="bg-gray-700 hover:bg-purple-600 text-white p-2 rounded-full shadow transition" title="Send to ComfyUI (Generate Video)">
+                                       <button @click="queueShot(shot.id)" class="bg-gray-700 hover:bg-purple-600 text-white p-2 rounded-full shadow transition" title="Generate Video (Wan 2.2)">
                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
                                            </svg>
+                                       </button>
+                                       <button @click="queueAudioVideo(shot.id)" :disabled="!selectedAudio" :class="selectedAudio ? 'bg-gray-700 hover:bg-yellow-600' : 'bg-gray-800 opacity-40 cursor-not-allowed'" class="text-white p-2 rounded-full shadow transition" title="Generate Video with Audio (LTX 2.3)">
+                                           🎵
                                        </button>
                                     </td>
                                 </tr>
@@ -192,10 +205,49 @@
                 projects: [],
                 selectedProject: '',
                 currentProject: null,
+                videoModel: 'ltx',
+                selectedAudio: '',
+                audioTracks: [],
                 notification: '',
+                notifType: 'success',
+                notifTimer: null,
 
                 async init() {
                     await this.refreshProjects();
+                    await this.loadAudioTracks();
+                },
+
+                async loadAudioTracks() {
+                    try {
+                        const res = await fetch('/api/tracks');
+                        this.audioTracks = await res.json();
+                    } catch(e) {
+                        console.error('Failed to load audio tracks', e);
+                    }
+                },
+
+                async queueAudioVideo(shotId) {
+                    if (!this.selectedProject) return;
+                    if (!this.selectedAudio) {
+                        this.notify('Select an audio track first!', 'error');
+                        return;
+                    }
+                    this.notify(`Queueing Audio Video for Shot ${shotId}...`, 'info');
+                    try {
+                        const res = await fetch(`/api/project/${this.selectedProject}/queue-audio-video/${shotId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ audioPath: this.selectedAudio })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            this.notify(`🎵 Shot ${shotId} queued with audio!`);
+                        } else {
+                            this.notify('Failed: ' + data.error, 'error');
+                        }
+                    } catch(e) {
+                        this.notify('Request failed', 'error');
+                    }
                 },
 
                 async refreshProjects() {
@@ -341,16 +393,18 @@
 
                 async queueShot(shotId) {
                     if (!this.selectedProject) return;
-                    this.notify('Queueing Shot ' + shotId + ' for generation...', 'info');
+                    this.notify(`Queueing Shot ${shotId} using ${this.videoModel.toUpperCase()}...`, 'info');
 
                     try {
                         const res = await fetch(`/api/project/${this.selectedProject}/queue-video/${shotId}`, {
-                            method: 'POST'
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ model: this.videoModel })
                         });
                         const data = await res.json();
                         
                         if (data.success) {
-                            this.notify('Shot ' + shotId + ' queued successfully! (ID: ' + data.promptId.substring(0,6) + ')');
+                            this.notify('Shot ' + shotId + ' queued successfully!');
                         } else {
                             this.notify('Failed to queue: ' + data.error, 'error');
                         }
@@ -363,7 +417,8 @@
                 async generatePrompts(shotId = null) {
                     if (!this.selectedProject) return;
                     
-                    this.notify(shotId ? 'Generating AI prompts for Shot ' + shotId + '...' : 'Generating prompts for all...', 'info');
+                    const msg = shotId ? `⚡ Generating prompts for Shot ${shotId} — please wait (AI running)...` : '⚡ Generating all prompts — this may take a while...';
+                    this.notify(msg, 'info', true); // persist until done
                     
                     try {
                         const res = await fetch(`/api/project/${this.selectedProject}/generate-prompts`, {
@@ -374,12 +429,14 @@
                         const data = await res.json();
                         
                         if (data.success) {
-                            await this.loadProject(); // Reload to see changes
-                            this.notify(`Updated prompts for ${data.updated} shots`);
+                            await this.loadProject();
+                            this.notify(`✅ Updated prompts for ${data.updated} shot(s)`);
+                        } else {
+                            this.notify('❌ Failed: ' + (data.error || 'Unknown error'), 'error');
                         }
                     } catch (e) {
                         console.error("Prompt generation failed", e);
-                        this.notify('Generation failed', 'error');
+                        this.notify('❌ Generation failed: ' + e.message, 'error');
                     }
                 },
 
@@ -412,9 +469,13 @@
                     }
                 },
 
-                async notify(msg, type = 'success') {
+                notify(msg, type = 'success', persist = false) {
+                    if (this.notifTimer) clearTimeout(this.notifTimer);
                     this.notification = msg;
-                    setTimeout(() => this.notification = '', 3000);
+                    this.notifType = type;
+                    if (!persist) {
+                        this.notifTimer = setTimeout(() => { this.notification = ''; this.notifTimer = null; }, 4000);
+                    }
                 },
 
                 resolvePath(absolutePath) {
