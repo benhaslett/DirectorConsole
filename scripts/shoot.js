@@ -112,7 +112,7 @@ async function animateShot(shot, imageDir, videoDir) {
     console.log(`🎞️ Animating Shot ${shot.id}: "${shot.name}"`);
     const { execSync } = require('child_process');
     try {
-        const cmd = `node skills/comfy-art/scripts/animate.js "${shot.image_file}" "${shot.video_prompt}"`;
+        const cmd = `node skills/director/scripts/animate_v2.js "${shot.image_file}" "${shot.video_prompt}"`;
         console.log(`> Executing: ${cmd}`);
         execSync(cmd, { stdio: 'inherit' });
 

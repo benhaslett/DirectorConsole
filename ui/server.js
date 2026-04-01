@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const cors = require('cors');
 const multer = require('multer');
 const { spawn } = require('child_process');
@@ -165,6 +166,7 @@ app.post('/api/project/:name/bulk-upload', (req, res) => {
 
     try {
       let projectData = JSON.parse(fs.readFileSync(shotListPath, 'utf8'));
+      if (!projectData.shots) projectData.shots = [];
 
       let maxId = 0;
       if (projectData.shots && projectData.shots.length > 0) {
@@ -363,37 +365,126 @@ Output ONLY valid JSON: { "image_prompt": "...", "video_prompt": "..." }`;
   }
 });
 
-// 8. Queue Video Generation (Wan 2.2 i2v)
+// Helper: upload image to ComfyUI and return the uploaded filename
+function comfyUploadImage(imagePath) {
+  return new Promise((resolve, reject) => {
+    const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
+    const filename = path.basename(imagePath);
+    const fileStream = fs.createReadStream(imagePath);
+    const req = http.request({
+      hostname: '127.0.0.1', port: 8000, path: '/upload/image', method: 'POST',
+      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
+    }, (res) => {
+      let body = '';
+      res.on('data', d => body += d);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(body);
+          if (json.name) resolve(json.name);
+          else reject(new Error('Upload failed: ' + body));
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${filename}"\r\nContent-Type: image/png\r\n\r\n`);
+    fileStream.pipe(req, { end: false });
+    fileStream.on('end', () => {
+      req.write(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="overwrite"\r\n\r\ntrue\r\n--${boundary}--\r\n`);
+      req.end();
+    });
+  });
+}
+
+// Helper: submit workflow to ComfyUI queue, returns prompt_id
+function comfyQueuePrompt(workflow) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({ prompt: workflow });
+    const req = http.request({
+      hostname: '127.0.0.1', port: 8000, path: '/prompt', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }
+    }, (res) => {
+      let body = '';
+      res.on('data', d => body += d);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(body);
+          if (json.prompt_id) resolve(json.prompt_id);
+          else reject(new Error('Queue failed: ' + body));
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+// 8. Queue Video Generation — direct ComfyUI submission, no child process
 app.post('/api/project/:name/queue-video/:shotId', async (req, res) => {
   const projectName = req.params.name;
   const shotId = parseInt(req.params.shotId);
   const shotListPath = path.join(PROJECTS_DIR, projectName, 'shot_list.json');
+  const targetModel = req.body.model || 'wan'; // 'ltx' or 'wan'
 
   try {
     const projectData = JSON.parse(fs.readFileSync(shotListPath, 'utf8'));
     const shot = projectData.shots.find(s => s.id === shotId);
 
-    if (!shot) return res.status(404).json({ error: "Shot not found" });
-    if (!shot.image_file) return res.status(400).json({ error: "No image file for shot" });
+    if (!shot) return res.status(404).json({ error: 'Shot not found' });
+    if (!shot.image_file) return res.status(400).json({ error: 'No image file for shot' });
+    if (!fs.existsSync(shot.image_file)) return res.status(400).json({ error: `Image file not found: ${shot.image_file}` });
 
-    // Fall back to image_prompt if video_prompt is empty
     const prompt = (shot.video_prompt && shot.video_prompt.trim().length > 0)
       ? shot.video_prompt
-      : shot.image_prompt || "cinematic motion, atmospheric, slow subtle movement";
+      : shot.image_prompt || 'cinematic motion, atmospheric, slow subtle movement';
 
-    const scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/animate_wan.js');
-    console.log(`[Queue Video] Shot ${shotId}: node ${scriptPath}`);
+    let workflowFile;
+    let workflow;
 
-    const child = spawn('node', [scriptPath, shot.image_file, prompt], {
-      detached: true,
-      stdio: 'ignore'
-    });
-    child.unref();
+    if (targetModel === 'ltx') {
+      // Use LTX 2.3 i2v workflow
+      workflowFile = 'C:\\Users\\benha\\Downloads\\video_ltx2_3_i2v-genvideo.json';
+      workflow = JSON.parse(fs.readFileSync(workflowFile, 'utf8'));
+      
+      const uploadedName = await comfyUploadImage(shot.image_file);
+      
+      // Inject LTX inputs
+      if (workflow['269']) workflow['269'].inputs.image = uploadedName; // LoadImage
+      if (workflow['267:266']) workflow['267:266'].inputs.value = prompt; // Prompt Gen
+      
+      const seed = Math.floor(Math.random() * 1000000000000000);
+      if (workflow['267:216']) workflow['267:216'].inputs.noise_seed = seed;
+      if (workflow['267:237']) workflow['267:237'].inputs.noise_seed = seed + 1; // Different seed
+      
+      if (workflow['75']) { // SaveVideo
+        const safeName = path.basename(shot.image_file, path.extname(shot.image_file)).substring(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_');
+        workflow['75'].inputs.filename_prefix = `LTX23_${safeName}`;
+      }
+    } else {
+      // Use Wan 2.2 workflow
+      workflowFile = path.resolve(__dirname, '../../comfy-art/assets/workflows/wan_video_workflow.json');
+      workflow = JSON.parse(fs.readFileSync(workflowFile, 'utf8'));
 
-    res.json({ success: true, message: `Video queued for Shot ${shotId}: "${shot.name}"` });
+      const uploadedName = await comfyUploadImage(shot.image_file);
+
+      // Inject Wan inputs
+      if (workflow['97']) workflow['97'].inputs.image = uploadedName;
+      if (workflow['129:93']) workflow['129:93'].inputs.text = prompt;
+      if (workflow['129:86']) workflow['129:86'].inputs.noise_seed = Math.floor(Math.random() * 1000000000000000);
+      if (workflow['108']) {
+        const safeName = path.basename(shot.image_file, path.extname(shot.image_file)).substring(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_');
+        workflow['108'].inputs.filename_prefix = `Wan_${safeName}`;
+      }
+    }
+
+    // Submit to ComfyUI
+    const promptId = await comfyQueuePrompt(workflow);
+    console.log(`[Queue Video] Shot ${shotId} (${targetModel.toUpperCase()}) submitted. ComfyUI prompt_id: ${promptId}`);
+
+    res.json({ success: true, promptId, message: `Shot ${shotId} queued for ${targetModel.toUpperCase()}` });
 
   } catch (err) {
-    console.error(err);
+    console.error('[Queue Video Error]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -479,6 +570,21 @@ app.post('/api/project/:name/queue-audio-video/:shotId', async (req, res) => {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// 12. Serve arbitrary local files (images/videos) by absolute path
+// Security: only image/video extensions allowed
+app.get('/api/file', (req, res) => {
+  const filePath = req.query.path;
+  if (!filePath) return res.status(400).send('No path provided');
+
+  const ext = path.extname(filePath).toLowerCase();
+  const allowed = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.mp4', '.webm', '.mov'];
+  if (!allowed.includes(ext)) return res.status(403).send('File type not allowed');
+
+  if (!fs.existsSync(filePath)) return res.status(404).send('File not found: ' + filePath);
+
+  res.sendFile(path.resolve(filePath));
 });
 
 // Start Server

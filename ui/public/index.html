@@ -127,14 +127,14 @@
                                             <!-- Always visible upload button (if no image) or hover overlay (if image exists) -->
                                             <div :class="shot.image_file ? 'opacity-0 group-hover:opacity-100 bg-black/70' : 'bg-transparent'" 
                                                  class="absolute inset-0 flex items-center justify-center transition-opacity cursor-pointer z-10" 
-                                                 @click="$refs['fileInput'+shot.id].click()">
+                                                 @click="$event.currentTarget.nextElementSibling.click()">
                                                 <button class="bg-gray-700 hover:bg-gray-600 text-white text-xs px-3 py-1 rounded shadow flex items-center gap-1 pointer-events-none">
                                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
                                                     <span x-text="shot.image_file ? 'Change Image' : 'Upload Image'"></span>
                                                 </button>
                                             </div>
                                             
-                                            <input type="file" :x-ref="'fileInput'+shot.id" class="hidden" accept="image/*" @change="uploadImage(shot.id, $event)">
+                                            <input type="file" class="hidden" accept="image/*" @change="uploadImage(shot.id, $event)">
                                         </div>
                                         <div class="mt-2 text-xs text-gray-500 truncate" x-text="shot.image_file ? shot.image_file.split('\\').pop() : ''"></div>
                                     </td>
@@ -480,17 +480,24 @@
 
                 resolvePath(absolutePath) {
                     if (!absolutePath) return '';
-                    // Convert absolute Windows path to relative URL served by /projects-static
-                    // Assuming path contains "projects\ProjectName\..."
-                    // We need to extract everything after "projects"
-                    
-                    // Normalize slashes
+
+                    // Already a relative URL (e.g. /projects-static/...)
+                    if (absolutePath.startsWith('/')) return absolutePath;
+
+                    // Normalize backslashes
                     const normalized = absolutePath.replace(/\\/g, '/');
-                    const parts = normalized.split('/projects/');
-                    
-                    if (parts.length > 1) {
-                        return `/projects-static/${parts[1]}`;
+
+                    // Paths inside the projects dir → serve via /projects-static
+                    const projectsParts = normalized.split('/projects/');
+                    if (projectsParts.length > 1) {
+                        return `/projects-static/${projectsParts[1]}`;
                     }
+
+                    // Any absolute Windows path (e.g. C:/Users/...) → proxy through /api/file
+                    if (/^[A-Za-z]:\//.test(normalized)) {
+                        return `/api/file?path=${encodeURIComponent(absolutePath)}`;
+                    }
+
                     return absolutePath; // Fallback
                 }
             }
