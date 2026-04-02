@@ -1,507 +1,805 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Director's Console</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <style>
-        [x-cloak] { display: none !important; }
-        .aspect-video { aspect-ratio: 16 / 9; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Director</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    :root {
+      --bg: #0b0b0f;
+      --surface: #13131c;
+      --elevated: #1b1b28;
+      --border: #252535;
+      --accent: #6366f1;
+      --accent-dim: #3730a3;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --danger: #f43f5e;
+      --success: #22c55e;
+      --warn: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; }
+    [x-cloak] { display: none !important; }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+    textarea, input[type=text], input[type=number], select {
+      background: var(--elevated);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 7px 10px;
+      font-size: 13px;
+      width: 100%;
+      outline: none;
+      transition: border-color .15s;
+      font-family: inherit;
+    }
+    textarea:focus, input[type=text]:focus, input[type=number]:focus, select:focus {
+      border-color: var(--accent);
+    }
+    textarea { resize: vertical; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 6px; font-size: 13px;
+      font-weight: 500; cursor: pointer; border: none; transition: all .15s;
+    }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:not(:disabled):hover { background: #4f46e5; }
+    .btn-ghost { background: var(--elevated); color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:not(:disabled):hover { background: var(--surface); border-color: var(--accent); }
+    .btn-danger { background: transparent; color: var(--danger); border: 1px solid transparent; }
+    .btn-danger:hover { background: rgba(244,63,94,.1); border-color: var(--danger); }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .btn-icon { padding: 6px; width: 32px; height: 32px; justify-content: center; }
+
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 20px;
+      font-size: 11px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+    }
+    .badge-pending   { background: rgba(100,116,139,.2); color: #94a3b8; }
+    .badge-generating { background: rgba(99,102,241,.2); color: #818cf8; animation: pulse 1.5s infinite; }
+    .badge-image_ready { background: rgba(16,185,129,.2); color: #34d399; }
+    .badge-done      { background: rgba(34,197,94,.2); color: #86efac; }
+    .badge-failed    { background: rgba(244,63,94,.2); color: #fca5a5; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+    /* Split pane */
+    #divider {
+      width: 5px; flex-shrink: 0; cursor: col-resize;
+      background: var(--border); transition: background .15s;
+      position: relative;
+    }
+    #divider:hover, #divider.dragging { background: var(--accent); }
+    #divider::after {
+      content: ''; position: absolute; inset: 0 -3px;
+    }
+
+    /* Chat bubbles */
+    .chat-bubble-user {
+      background: var(--accent-dim); border-radius: 12px 12px 4px 12px;
+      padding: 10px 14px; max-width: 85%; margin-left: auto;
+      font-size: 13.5px; line-height: 1.6; white-space: pre-wrap;
+    }
+    .chat-bubble-assistant {
+      background: var(--elevated); border: 1px solid var(--border);
+      border-radius: 12px 12px 12px 4px;
+      padding: 10px 14px; max-width: 92%;
+      font-size: 13.5px; line-height: 1.6; white-space: pre-wrap;
+    }
+    .chat-bubble-assistant.pending::after {
+      content: '▋'; animation: blink .7s step-end infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* Shot card */
+    .shot-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden; transition: border-color .15s;
+    }
+    .shot-card:hover { border-color: #333348; }
+    .shot-img-thumb {
+      width: 160px; min-width: 160px; height: 90px; object-fit: cover;
+      background: #0a0a12; display: flex; align-items: center; justify-content: center;
+    }
+
+    /* Section heading */
+    .section-label {
+      font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+      text-transform: uppercase; color: var(--muted);
+    }
+
+    /* Collapsible settings */
+    details summary { cursor: pointer; user-select: none; list-style: none; }
+    details summary::-webkit-details-marker { display: none; }
+  </style>
 </head>
-<body class="bg-gray-900 text-gray-100 font-sans min-h-screen">
 
-    <div x-data="directorApp()" class="container mx-auto p-6">
-        
-        <!-- Header -->
-        <header class="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
-            <h1 class="text-3xl font-bold text-emerald-400 tracking-tight">🎬 Director's Console</h1>
-            <div class="flex gap-4">
-                <select x-model="videoModel" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-purple-500 text-purple-400 font-semibold">
-                    <option value="ltx">LTX (Standard)</option>
-                    <option value="wan">Wan 2.2 (5s Coherent)</option>
-                </select>
-                <select x-model="selectedAudio" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-yellow-500 text-yellow-400 font-semibold max-w-xs">
-                    <option value="">🎵 No Audio Track</option>
-                    <template x-for="track in audioTracks" :key="track.path">
-                        <option :value="track.path" x-text="track.name"></option>
-                    </template>
-                </select>
-                <select x-model="selectedProject" @change="loadProject()" class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-emerald-500">
-                    <option value="">Select Project...</option>
-                    <template x-for="project in projects" :key="project">
-                        <option :value="project" x-text="project"></option>
-                    </template>
-                </select>
-                <button @click="createProject()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded text-sm shadow transition flex items-center gap-1" title="New Project">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                    </svg>
-                    New
-                </button>
-                <button @click="refreshProjects()" class="text-gray-400 hover:text-white" title="Refresh List">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                </button>
-            </div>
-        </header>
+<body class="flex flex-col h-screen overflow-hidden" x-data="directorApp()" @mouseup="stopDrag" @mousemove="onDrag($event)">
 
-        <!-- Main Content -->
-        <main>
-            <!-- No Project Selected -->
-            <div x-show="!currentProject" class="text-center py-20 text-gray-500">
-                <p class="text-xl">Select a project to begin.</p>
-            </div>
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header class="flex items-center gap-3 px-4 h-12 border-b flex-shrink-0" style="background:var(--surface);border-color:var(--border)">
+    <span class="font-bold text-sm tracking-[3px] text-white/80 mr-1">DIRECTOR</span>
 
-            <!-- Project Loaded -->
-            <div x-show="currentProject" x-cloak>
-                
-                <div class="flex justify-between items-center mb-6">
-                    <div>
-                        <h2 class="text-2xl font-semibold" x-text="currentProject.concept || selectedProject"></h2>
-                        <p class="text-gray-400 text-sm" x-text="currentProject.shots.length + ' shots total'"></p>
-                    </div>
-                    <div class="flex gap-3">
-                        <button @click="saveProject()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow transition flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M7.707 10.293a1 1 0 10-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 11.586V6h5a2 2 0 012 2v7a2 2 0 01-2 2H4a2 2 0 01-2-2V8a2 2 0 012-2h5v5.586l-1.293-1.293zM9 4a1 1 0 012 0v2H9V4z"/></svg>
-                            Save
-                        </button>
-                        <button @click="$refs.bulkUploadInput.click()" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded shadow transition flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
-                            Bulk Import
-                        </button>
-                        <input type="file" x-ref="bulkUploadInput" class="hidden" multiple accept="image/*" @change="bulkUpload($event)">
-                        <button @click="exportToDirector()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded shadow transition flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
-                            Export MD
-                        </button>
-                    </div>
-                </div>
+    <!-- Project selector -->
+    <select x-model="selectedProject" @change="onProjectChange()" class="w-44 h-8" style="padding:3px 8px;font-size:12px">
+      <option value="">— select project —</option>
+      <template x-for="p in projects" :key="p">
+        <option :value="p" x-text="p"></option>
+      </template>
+    </select>
+    <button @click="createProject()" class="btn btn-ghost btn-sm">+ New</button>
+    <button @click="refreshProjects()" class="btn btn-ghost btn-icon btn-sm" title="Refresh">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+    </button>
 
-                <!-- Notification -->
-                <div x-show="notification" x-transition :class="notifType === 'error' ? 'bg-red-600' : notifType === 'info' ? 'bg-blue-600 animate-pulse' : 'bg-emerald-600'" class="fixed top-5 right-5 text-white px-6 py-3 rounded shadow-lg z-50">
-                    <span x-text="notification"></span>
-                </div>
+    <div class="h-5 w-px mx-1" style="background:var(--border)"></div>
 
-                <!-- Shots Table -->
-                <div class="overflow-x-auto bg-gray-800 rounded-lg border border-gray-700 shadow-xl">
-                    <table class="w-full text-left border-collapse">
-                        <thead>
-                            <tr class="bg-gray-900 text-gray-400 uppercase text-xs tracking-wider border-b border-gray-700">
-                                <th class="p-4 w-16">ID</th>
-                                <th class="p-4 w-1/4">Source Image</th>
-                                <th class="p-4 w-1/3">LTX.2 Prompt</th>
-                                <th class="p-4 w-1/4">Result Video</th>
-                                <th class="p-4 w-24">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-700">
-                            <template x-for="(shot, index) in currentProject.shots" :key="shot.id">
-                                <tr class="hover:bg-gray-750 transition-colors">
-                                    
-                                    <!-- ID -->
-                                    <td class="p-4 font-mono text-gray-500" x-text="shot.id"></td>
-                                    
-                                    <!-- Image Column -->
-                                    <td class="p-4 align-top">
-                                        <div class="relative w-full aspect-video bg-gray-900 rounded overflow-hidden border border-gray-700 flex flex-col items-center justify-center group">
-                                            
-                                            <!-- Image Display -->
-                                            <template x-if="shot.image_file">
-                                                <img :src="resolvePath(shot.image_file)" class="absolute inset-0 w-full h-full object-cover">
-                                            </template>
-                                            
-                                            <!-- Placeholder (only show if no image) -->
-                                            <template x-if="!shot.image_file">
-                                                <div class="flex flex-col items-center text-gray-600">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                                    </svg>
-                                                    <span class="text-xs">No Image</span>
-                                                </div>
-                                            </template>
-
-                                            <!-- Always visible upload button (if no image) or hover overlay (if image exists) -->
-                                            <div :class="shot.image_file ? 'opacity-0 group-hover:opacity-100 bg-black/70' : 'bg-transparent'" 
-                                                 class="absolute inset-0 flex items-center justify-center transition-opacity cursor-pointer z-10" 
-                                                 @click="$event.currentTarget.nextElementSibling.click()">
-                                                <button class="bg-gray-700 hover:bg-gray-600 text-white text-xs px-3 py-1 rounded shadow flex items-center gap-1 pointer-events-none">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
-                                                    <span x-text="shot.image_file ? 'Change Image' : 'Upload Image'"></span>
-                                                </button>
-                                            </div>
-                                            
-                                            <input type="file" class="hidden" accept="image/*" @change="uploadImage(shot.id, $event)">
-                                        </div>
-                                        <div class="mt-2 text-xs text-gray-500 truncate" x-text="shot.image_file ? shot.image_file.split('\\').pop() : ''"></div>
-                                    </td>
-
-                                    <!-- Prompt Column -->
-                                    <td class="p-4 align-top">
-                                        <label class="block text-xs text-gray-500 mb-1 uppercase">Image Prompt (Ref)</label>
-                                        <textarea x-model="shot.image_prompt" rows="2" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-gray-400 mb-3 focus:outline-none focus:border-gray-600" placeholder="Image Prompt..."></textarea>
-                                        
-                                        <label class="block text-xs text-emerald-500 mb-1 uppercase font-bold">LTX.2 Video Prompt</label>
-                                        <textarea x-model="shot.video_prompt" rows="4" class="w-full bg-gray-900 border border-emerald-900/50 rounded p-2 text-sm text-gray-200 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" placeholder="Describe the motion..."></textarea>
-                                    </td>
-
-                                    <!-- Video Column -->
-                                    <td class="p-4 align-top">
-                                        <div class="w-full aspect-video bg-black rounded overflow-hidden border border-gray-700 flex items-center justify-center">
-                                            <template x-if="shot.video_file">
-                                                <video controls class="w-full h-full object-cover">
-                                                    <source :src="resolvePath(shot.video_file)" type="video/mp4">
-                                                    Your browser does not support video.
-                                                </video>
-                                            </template>
-                                            <template x-if="!shot.video_file">
-                                                <div class="text-gray-700 text-sm">Waiting for Render</div>
-                                            </template>
-                                        </div>
-                                        <div class="mt-2 flex justify-between items-center">
-                                            <span class="text-xs font-mono uppercase px-2 py-1 rounded bg-gray-900 text-gray-400" x-text="shot.status"></span>
-                                            <span class="text-xs text-gray-600" x-show="shot.duration" x-text="shot.duration + 's'"></span>
-                                        </div>
-                                    </td>
-
-                                    <!-- Actions Column -->
-                                    <td class="p-4 align-top text-center flex flex-col gap-2">
-                                       <button @click="generatePrompts(shot.id)" class="bg-gray-700 hover:bg-emerald-600 text-white p-2 rounded-full shadow transition" title="Auto-Generate Prompts">
-                                           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                               <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd" />
-                                           </svg>
-                                       </button>
-
-                                       <button @click="queueImage(shot.id)" class="bg-gray-700 hover:bg-blue-600 text-white p-2 rounded-full shadow transition" title="Generate Cinematic Still (Re-Imagine)">
-                                           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                               <path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clip-rule="evenodd" />
-                                           </svg>
-                                       </button>
-
-                                       <button @click="queueShot(shot.id)" class="bg-gray-700 hover:bg-purple-600 text-white p-2 rounded-full shadow transition" title="Generate Video (Wan 2.2)">
-                                           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                               <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
-                                           </svg>
-                                       </button>
-                                       <button @click="queueAudioVideo(shot.id)" :disabled="!selectedAudio" :class="selectedAudio ? 'bg-gray-700 hover:bg-yellow-600' : 'bg-gray-800 opacity-40 cursor-not-allowed'" class="text-white p-2 rounded-full shadow transition" title="Generate Video with Audio (LTX 2.3)">
-                                           🎵
-                                       </button>
-                                    </td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </main>
+    <!-- Mode toggle -->
+    <div class="flex rounded-lg overflow-hidden border" style="border-color:var(--border)">
+      <button @click="setMode('supervised')" :class="projectConfig.mode==='supervised' ? 'bg-indigo-700 text-white' : 'text-gray-400 hover:text-white'" class="px-3 py-1 text-xs font-semibold transition-colors">Supervised</button>
+      <button @click="setMode('full-auto')" :class="projectConfig.mode==='full-auto' ? 'bg-amber-700 text-white' : 'text-gray-400 hover:text-white'" class="px-3 py-1 text-xs font-semibold transition-colors">Full Auto</button>
     </div>
 
-    <script>
-        function directorApp() {
-            return {
-                projects: [],
-                selectedProject: '',
-                currentProject: null,
-                videoModel: 'ltx',
-                selectedAudio: '',
-                audioTracks: [],
-                notification: '',
-                notifType: 'success',
-                notifTimer: null,
+    <div class="h-5 w-px mx-1" style="background:var(--border)"></div>
 
-                async init() {
-                    await this.refreshProjects();
-                    await this.loadAudioTracks();
-                },
+    <!-- Video model -->
+    <select x-model="videoModel" class="w-32 h-8" style="padding:3px 8px;font-size:12px">
+      <option value="ltx">LTX 2.3</option>
+      <option value="wan">Wan 2.2</option>
+    </select>
 
-                async loadAudioTracks() {
-                    try {
-                        const res = await fetch('/api/tracks');
-                        this.audioTracks = await res.json();
-                    } catch(e) {
-                        console.error('Failed to load audio tracks', e);
-                    }
-                },
+    <!-- Audio track -->
+    <select x-model="selectedAudio" class="w-44 h-8" style="padding:3px 8px;font-size:12px">
+      <option value="">No Audio Track</option>
+      <template x-for="t in audioTracks" :key="t.path">
+        <option :value="t.path" x-text="t.name"></option>
+      </template>
+    </select>
 
-                async queueAudioVideo(shotId) {
-                    if (!this.selectedProject) return;
-                    if (!this.selectedAudio) {
-                        this.notify('Select an audio track first!', 'error');
-                        return;
-                    }
-                    this.notify(`Queueing Audio Video for Shot ${shotId}...`, 'info');
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}/queue-audio-video/${shotId}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ audioPath: this.selectedAudio })
-                        });
-                        const data = await res.json();
-                        if (data.success) {
-                            this.notify(`🎵 Shot ${shotId} queued with audio!`);
-                        } else {
-                            this.notify('Failed: ' + data.error, 'error');
-                        }
-                    } catch(e) {
-                        this.notify('Request failed', 'error');
-                    }
-                },
+    <div class="flex-1"></div>
 
-                async refreshProjects() {
-                    try {
-                        const res = await fetch('/api/projects');
-                        this.projects = await res.json();
-                        // If selectedProject is set but not in list (edge case), keep it? 
-                        // Or if we just created one, we want to ensure it's selected.
-                    } catch (e) {
-                        console.error("Failed to load projects", e);
-                    }
-                },
+    <!-- Save -->
+    <button @click="saveProject()" :disabled="!selectedProject" class="btn btn-primary btn-sm">Save</button>
+    <button @click="exportToDirector()" :disabled="!selectedProject" class="btn btn-ghost btn-sm">Export MD</button>
 
-                async loadProject() {
-                    if (!this.selectedProject) {
-                        this.currentProject = null;
-                        return;
-                    }
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}`);
-                        this.currentProject = await res.json();
-                    } catch (e) {
-                        console.error("Failed to load project details", e);
-                    }
-                },
+    <!-- Notification toast -->
+    <div x-show="notification" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-1" x-transition:enter-end="opacity-100 translate-y-0"
+      :class="notifType==='error'?'bg-red-700':notifType==='info'?'bg-indigo-700':'bg-emerald-700'"
+      class="fixed top-3 right-4 z-50 text-white text-sm px-4 py-2 rounded-lg shadow-xl pointer-events-none" x-text="notification"></div>
+  </header>
 
-                async saveProject() {
-                    if (!this.currentProject) return;
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(this.currentProject)
-                        });
-                        if (res.ok) {
-                            this.notify('Project saved successfully');
-                        }
-                    } catch (e) {
-                        console.error("Save failed", e);
-                        this.notify('Save failed!', 'error');
-                    }
-                },
+  <!-- ── Main Split Pane ─────────────────────────────────────────────────── -->
+  <div id="main-panes" class="flex flex-1 overflow-hidden" :class="dragging ? 'select-none' : ''">
 
-                async uploadImage(shotId, event) {
-                    const file = event.target.files[0];
-                    if (!file) return;
+    <!-- ── LEFT: Koda Chat ──────────────────────────────────────────────── -->
+    <aside class="flex flex-col flex-shrink-0 overflow-hidden" :style="'width:' + leftWidth + '%;min-width:260px'">
+      <!-- Chat header -->
+      <div class="flex items-center gap-2 px-4 py-2.5 border-b flex-shrink-0" style="background:var(--surface);border-color:var(--border)">
+        <div class="w-2 h-2 rounded-full" :class="selectedProject ? 'bg-emerald-400' : 'bg-gray-600'"></div>
+        <span class="font-bold text-xs tracking-widest text-white/70">KODA</span>
+        <span class="text-xs text-gray-500 ml-1">Co-Pilot</span>
+        <div class="flex-1"></div>
+        <button @click="clearChat()" :disabled="!chatMessages.length" class="btn btn-ghost btn-sm text-gray-500" title="Clear chat (does not delete saved history)">Clear</button>
+      </div>
 
-                    const formData = new FormData();
-                    formData.append('image', file);
+      <!-- Messages -->
+      <div id="chat-messages" class="flex-1 overflow-y-auto p-4 flex flex-col gap-3" style="background:var(--bg)">
+        <template x-if="!selectedProject">
+          <div class="text-center text-gray-600 text-sm mt-8">Select a project to start chatting with Koda.</div>
+        </template>
+        <template x-if="selectedProject && !chatMessages.length">
+          <div class="text-center text-gray-600 text-sm mt-8">
+            <p class="mb-2">Koda is ready.</p>
+            <p class="text-xs">Describe your concept, ask for a shot list,<br>or request prompt improvements.</p>
+          </div>
+        </template>
+        <template x-for="(msg, i) in chatMessages" :key="i">
+          <div :class="msg.role==='user' ? 'flex justify-end' : 'flex justify-start'">
+            <div :class="msg.role==='user' ? 'chat-bubble-user' : 'chat-bubble-assistant ' + (msg.pending ? 'pending' : '')" x-text="msg.content || ''"></div>
+          </div>
+        </template>
+      </div>
 
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}/upload/${shotId}`, {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const data = await res.json();
-                        
-                        if (data.success) {
-                            // Update local state to reflect new image immediately
-                            const shot = this.currentProject.shots.find(s => s.id === shotId);
-                            if (shot) {
-                                shot.image_file = data.filePath; // Store absolute path
-                                // Force reactivity hack if needed, but Alpine usually catches this
-                                this.notify('Image uploaded');
-                            }
-                        }
-                    } catch (e) {
-                        console.error("Upload failed", e);
-                        this.notify('Upload failed', 'error');
-                    }
-                },
+      <!-- Input -->
+      <div class="flex gap-2 p-3 border-t flex-shrink-0" style="background:var(--surface);border-color:var(--border)">
+        <textarea
+          x-model="chatInput"
+          @keydown.enter.prevent="if(!$event.shiftKey) sendChat()"
+          placeholder="Chat with Koda… (Enter to send, Shift+Enter for newline)"
+          rows="2"
+          :disabled="!selectedProject || chatStreaming"
+          class="flex-1 text-sm leading-snug"
+          style="resize:none;padding:8px 10px"
+        ></textarea>
+        <button @click="sendChat()" :disabled="!selectedProject || chatStreaming || !chatInput.trim()" class="btn btn-primary self-end">
+          <template x-if="!chatStreaming">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg>
+          </template>
+          <template x-if="chatStreaming">
+            <span class="text-xs">…</span>
+          </template>
+        </button>
+      </div>
+    </aside>
 
-                async exportToDirector() {
-                    if (!this.currentProject) return;
-                    // Auto-save first
-                    await this.saveProject();
-                    
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}/export`, {
-                            method: 'POST'
-                        });
-                        const data = await res.json();
-                        if (data.success) {
-                            this.notify(`Exported to ${data.path}`);
-                        }
-                    } catch (e) {
-                        console.error("Export failed", e);
-                    }
-                },
+    <!-- ── Divider ─────────────────────────────────────────────────────── -->
+    <div id="divider" :class="dragging ? 'dragging' : ''" @mousedown.prevent="startDrag()"></div>
 
-                async bulkUpload(event) {
-                    const files = event.target.files;
-                    if (!files.length) return;
+    <!-- ── RIGHT: Dashboard ────────────────────────────────────────────── -->
+    <section class="flex-1 overflow-y-auto flex flex-col" style="background:var(--bg)">
 
-                    const formData = new FormData();
-                    // Append multiple files with same field name 'images'
-                    for (let i = 0; i < files.length; i++) {
-                        formData.append('images', files[i]);
-                    }
+      <template x-if="!selectedProject">
+        <div class="flex-1 flex items-center justify-center text-gray-600 text-sm">
+          <p>Select or create a project to begin.</p>
+        </div>
+      </template>
 
-                    this.notify('Uploading ' + files.length + ' images...', 'info');
+      <template x-if="selectedProject">
+        <div class="flex flex-col gap-0">
 
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}/bulk-upload`, {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const data = await res.json();
-                        
-                        if (data.success) {
-                            // Reload project to get fresh data
-                            await this.loadProject();
-                            this.notify(`Imported ${data.newShots.length} shots`);
-                        } else {
-                            this.notify('Upload error: ' + data.error, 'error');
-                        }
-                    } catch (e) {
-                        console.error("Bulk upload failed", e);
-                        this.notify('Bulk upload failed', 'error');
-                    }
-                },
+          <!-- ── Project Settings ──────────────────────────────────────── -->
+          <details open class="border-b" style="border-color:var(--border)">
+            <summary class="flex items-center gap-2 px-5 py-3 cursor-pointer hover:bg-white/[.02] transition-colors">
+              <svg class="w-3.5 h-3.5 text-gray-500 transition-transform details-arrow" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+              <span class="section-label">Project Settings</span>
+              <span class="text-xs text-gray-600 ml-2 font-normal" x-text="projectConfig.concept ? projectConfig.concept.slice(0,60) + '…' : '(no concept set)'"></span>
+            </summary>
+            <div class="px-5 pb-5 pt-2 grid grid-cols-2 gap-4" style="background:var(--surface)">
+              <div class="col-span-2">
+                <label class="section-label block mb-1.5">Concept</label>
+                <textarea x-model="projectConfig.concept" rows="2" placeholder="High-level concept for this project…"></textarea>
+              </div>
+              <div class="col-span-2">
+                <label class="section-label block mb-1.5">Visual Style</label>
+                <textarea x-model="projectConfig.visual_style" rows="2" placeholder="Cinematic style, colour grade, references…"></textarea>
+              </div>
+              <div>
+                <label class="section-label block mb-1.5">Character Sheet Path</label>
+                <input type="text" x-model="projectConfig.character_sheet_path" placeholder="C:\path\to\characters">
+              </div>
+              <div>
+                <label class="section-label block mb-1.5">ComfyUI URL</label>
+                <input type="text" x-model="projectConfig.comfy_url" placeholder="localhost:8000">
+              </div>
+              <div class="col-span-2 flex gap-2 pt-1">
+                <button @click="saveConfig()" class="btn btn-primary btn-sm">Save Settings</button>
+                <button @click="$refs.bulkUploadRef.click()" class="btn btn-ghost btn-sm">Bulk Import Images</button>
+                
+              </div>
+            </div>
+          </details>
 
-                async queueImage(shotId) {
-                    if (!this.selectedProject) return;
-                    this.notify('Queueing Image Gen for Shot ' + shotId + '...', 'info');
+          <!-- ── Shot Dashboard ────────────────────────────────────────── -->
+          <div class="px-5 py-3 flex items-center gap-3 border-b flex-shrink-0" style="border-color:var(--border);background:var(--surface)">
+            <span class="section-label">Shot Dashboard</span>
+            <span class="text-xs text-gray-500" x-text="(currentProject?.shots?.length || 0) + ' shots'"></span>
+            <div class="flex-1"></div>
+            <button @click="addShot()" class="btn btn-ghost btn-sm">+ Add Shot</button>
+          </div>
 
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}/queue-image/${shotId}`, {
-                            method: 'POST'
-                        });
-                        const data = await res.json();
-                        
-                        if (data.success) {
-                            this.notify('Image Gen Queued! Check comfy/output folder.');
-                        } else {
-                            this.notify('Failed: ' + data.error, 'error');
-                        }
-                    } catch (e) {
-                        console.error("Queue failed", e);
-                        this.notify('Request failed', 'error');
-                    }
-                },
+          <!-- Shot Cards -->
+          <div class="flex flex-col gap-3 p-5">
+            <template x-if="!currentProject?.shots?.length">
+              <div class="text-center text-gray-600 text-sm py-8">No shots yet. Click "+ Add Shot" or ask Koda to generate a shot list.</div>
+            </template>
 
-                async queueShot(shotId) {
-                    if (!this.selectedProject) return;
-                    this.notify(`Queueing Shot ${shotId} using ${this.videoModel.toUpperCase()}...`, 'info');
+            <template x-for="(shot, idx) in currentProject?.shots || []" :key="shot.id">
+              <div class="shot-card">
+                <!-- Card Header -->
+                <div class="flex items-center gap-3 px-4 py-2.5 border-b" style="border-color:var(--border)">
+                  <span class="text-gray-600 text-xs font-mono w-8" x-text="'#' + String(shot.id).padStart(2,'0')"></span>
+                  <input type="text" x-model="shot.name" class="flex-1 font-semibold text-sm" style="background:transparent;border:none;padding:0;height:auto">
+                  <span class="badge" :class="'badge-' + shot.status" x-text="shot.status"></span>
+                  <span class="text-gray-600 text-xs" x-show="shot.duration" x-text="shot.duration + 's'"></span>
+                  <input type="number" x-model.number="shot.duration" min="1" max="60" class="w-14 text-xs text-center" style="padding:3px 6px">
+                  <button @click="deleteShot(shot.id)" class="btn btn-danger btn-icon btn-sm" title="Delete shot">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                  </button>
+                </div>
 
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}/queue-video/${shotId}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ model: this.videoModel })
-                        });
-                        const data = await res.json();
-                        
-                        if (data.success) {
-                            this.notify('Shot ' + shotId + ' queued successfully!');
-                        } else {
-                            this.notify('Failed to queue: ' + data.error, 'error');
-                        }
-                    } catch (e) {
-                        console.error("Queue failed", e);
-                        this.notify('Queue request failed', 'error');
-                    }
-                },
+                <!-- Card Body -->
+                <div class="flex gap-0">
+                  <!-- Image Thumbnail -->
+                  <div class="shot-img-thumb flex-shrink-0 relative group cursor-pointer" @click="$el.querySelector('input[type=file]').click()">
+                    <template x-if="shot.image_file">
+                      <img :src="resolvePath(shot.image_file)" class="w-full h-full object-cover">
+                    </template>
+                    <template x-if="!shot.image_file">
+                      <div class="flex flex-col items-center justify-center w-full h-full gap-1">
+                        <svg class="w-8 h-8 text-gray-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                        <span class="text-xs text-gray-700">No plate</span>
+                      </div>
+                    </template>
+                    <!-- Hover overlay -->
+                    <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <span class="text-white text-xs font-medium">Upload</span>
+                    </div>
+                    <input type="file" class="hidden" accept="image/*" @change="uploadImage(shot.id, $event)">
+                  </div>
 
-                async generatePrompts(shotId = null) {
-                    if (!this.selectedProject) return;
-                    
-                    const msg = shotId ? `⚡ Generating prompts for Shot ${shotId} — please wait (AI running)...` : '⚡ Generating all prompts — this may take a while...';
-                    this.notify(msg, 'info', true); // persist until done
-                    
-                    try {
-                        const res = await fetch(`/api/project/${this.selectedProject}/generate-prompts`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ shotId: shotId })
-                        });
-                        const data = await res.json();
-                        
-                        if (data.success) {
-                            await this.loadProject();
-                            this.notify(`✅ Updated prompts for ${data.updated} shot(s)`);
-                        } else {
-                            this.notify('❌ Failed: ' + (data.error || 'Unknown error'), 'error');
-                        }
-                    } catch (e) {
-                        console.error("Prompt generation failed", e);
-                        this.notify('❌ Generation failed: ' + e.message, 'error');
-                    }
-                },
+                  <!-- Video (if exists) -->
+                  <div x-show="shot.video_file" class="shot-img-thumb flex-shrink-0 border-l" style="border-color:var(--border)">
+                    <template x-if="shot.video_file">
+                      <video :src="resolvePath(shot.video_file)" class="w-full h-full object-cover" loop muted playsinline @mouseenter="$el.play()" @mouseleave="$el.pause();$el.currentTime=0"></video>
+                    </template>
+                  </div>
 
-                async createProject() {
-                    const name = prompt("Enter new project name (e.g., MyNewVideo):");
-                    if (!name) return;
-                    
-                    // Simple validation: alphanumeric + underscores/dashes only
-                    const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-                    
-                    try {
-                        const res = await fetch('/api/project/create', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: safeName })
-                        });
-                        const data = await res.json();
-                        
-                        if (data.success) {
-                            await this.refreshProjects();
-                            this.selectedProject = data.name; // Use returned name
-                            await this.loadProject();
-                            this.notify('Project created: ' + data.name);
-                        } else {
-                            this.notify('Creation failed: ' + data.error, 'error');
-                        }
-                    } catch (e) {
-                        console.error("Create failed", e);
-                        this.notify('Create request failed: ' + e.message, 'error');
-                    }
-                },
+                  <!-- Prompts -->
+                  <div class="flex-1 p-3 flex flex-col gap-2 min-w-0">
+                    <div>
+                      <label class="section-label block mb-1">Image Prompt</label>
+                      <textarea x-model="shot.image_prompt" rows="2" placeholder="Describe the static frame for plate generation…" class="text-xs" style="font-size:12px"></textarea>
+                    </div>
+                    <div>
+                      <label class="section-label block mb-1" style="color:#818cf8">Video Prompt (LTX 2.3)</label>
+                      <textarea x-model="shot.video_prompt" rows="3" placeholder="Describe the motion, camera, atmosphere…" style="border-color:#2e2e4e;font-size:12px" class="text-sm"></textarea>
+                    </div>
+                      <div class="flex gap-2 mt-2">
+                        <div class="flex-1">
+                          <label class="section-label block mb-1">Audio File</label>
+                          <select x-model="shot.audio_file" class="text-xs" style="font-size:12px;background:var(--bg);border-color:var(--border);">
+                            <option value="">None</option>
+                            <template x-for="t in audioTracks" :key="t.path">
+                              <option :value="t.path" x-text="t.name"></option>
+                            </template>
+                          </select>
+                        </div>
+                        <div class="flex-1">
+                          <label class="section-label block mb-1">Character Sheet</label>
+                          <select x-model="shot.character_sheets" class="text-xs" style="font-size:12px;background:var(--bg);border-color:var(--border);">
+                            <option value="">None</option>
+                            <template x-for="c in projectCharacters" :key="c.path">
+                              <option :value="c.path" x-text="c.name"></option>
+                            </template>
+                          </select>
+                        </div>
+                      </div>
+                  </div>
+                </div>
 
-                notify(msg, type = 'success', persist = false) {
-                    if (this.notifTimer) clearTimeout(this.notifTimer);
-                    this.notification = msg;
-                    this.notifType = type;
-                    if (!persist) {
-                        this.notifTimer = setTimeout(() => { this.notification = ''; this.notifTimer = null; }, 4000);
-                    }
-                },
+                <!-- Card Footer -->
+                <div class="flex items-center gap-2 px-4 py-2.5 border-t" style="border-color:var(--border);background:var(--elevated)">
+                  <button @click="sendKodaPrompt(shot)" class="btn btn-ghost btn-sm" title="Ask Koda to write a prompt">
+                      <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z"/></svg>
+                      Auto Prompts
+                    </button>
+                  <button @click="queueImage(shot.id)" class="btn btn-ghost btn-sm" title="Generate image plate via ComfyUI">
+                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z"/></svg>
+                    Gen Image
+                  </button>
+                  <button @click="queueShot(shot.id)" class="btn btn-ghost btn-sm" title="Queue video generation">
+                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/></svg>
+                    Gen Video
+                  </button>
+                  <button @click="queueAudioVideo(shot.id)" :disabled="!(shot.audio_file || selectedAudio)" class="btn btn-ghost btn-sm" :class="!(shot.audio_file || selectedAudio) && 'opacity-30'">
+                    🎵 Audio Video
+                  </button>
+                  <div class="flex-1"></div>
+                  <span class="text-xs text-gray-600" x-show="shot.image_file" x-text="shot.image_file ? shot.image_file.split('\\').pop().split('/').pop() : ''"></span>
+                </div>
+              </div>
+            </template>
 
-                resolvePath(absolutePath) {
-                    if (!absolutePath) return '';
+            <!-- Bottom spacer -->
+              <input type="file" x-ref="bulkUploadRef" class="hidden" multiple accept="image/*,video/*" @change="bulkUpload($event)">
+            <div class="h-4"></div>
+          </div>
+        </div>
+      </template>
+    </section>
+  </div>
 
-                    // Already a relative URL (e.g. /projects-static/...)
-                    if (absolutePath.startsWith('/')) return absolutePath;
+  <script>
+  function directorApp() {
+    return {
+      // ── Project ──
+      projects: [],
+      selectedProject: '',
+      currentProject: null,
+      projectConfig: {
+        concept: '', visual_style: '',
+        character_sheet_path: 'C:\\Users\\benha\\OneDrive\\03_CREATIVE\\Music\\My Ways of Songs\\_Assets\\Characters',
+        comfy_url: 'localhost:8000',
+        mode: 'supervised'
+      },
 
-                    // Normalize backslashes
-                    const normalized = absolutePath.replace(/\\/g, '/');
+      // ── Chat ──
+      chatMessages: [],
+      chatInput: '',
+      chatStreaming: false,
 
-                    // Paths inside the projects dir → serve via /projects-static
-                    const projectsParts = normalized.split('/projects/');
-                    if (projectsParts.length > 1) {
-                        return `/projects-static/${projectsParts[1]}`;
-                    }
+      // ── UI ──
+      videoModel: 'ltx',
+      selectedAudio: '',
+      audioTracks: [],
+        projectCharacters: [],
+      notification: '',
+      notifType: 'success',
+      notifTimer: null,
+      leftWidth: 35,
+      dragging: false,
+      _dragStartX: 0,
+      _dragStartW: 0,
 
-                    // Any absolute Windows path (e.g. C:/Users/...) → proxy through /api/file
-                    if (/^[A-Za-z]:\//.test(normalized)) {
-                        return `/api/file?path=${encodeURIComponent(absolutePath)}`;
-                    }
+      // ── Lifecycle ──────────────────────────────────────────────────────────
 
-                    return absolutePath; // Fallback
-                }
-            }
+      async init() {
+        await this.refreshProjects();
+        
+      },
+
+      // ── Divider Drag ───────────────────────────────────────────────────────
+
+      startDrag() {
+        this.dragging = true;
+      },
+      stopDrag() {
+        this.dragging = false;
+      },
+      onDrag(e) {
+        if (!this.dragging) return;
+        const container = document.getElementById('main-panes');
+        const rect = container.getBoundingClientRect();
+        const pct = ((e.clientX - rect.left) / rect.width) * 100;
+        this.leftWidth = Math.max(22, Math.min(58, pct));
+      },
+
+      // ── Projects ───────────────────────────────────────────────────────────
+
+      async refreshProjects() {
+        try {
+          const res = await fetch('/api/projects');
+          this.projects = await res.json();
+        } catch (e) { console.error(e); }
+      },
+
+      async onProjectChange() {
+        if (!this.selectedProject) {
+          this.currentProject = null;
+          this.projectConfig = { concept: '', visual_style: '', character_sheet_path: '', comfy_url: 'localhost:8000', mode: 'supervised' };
+          this.chatMessages = [];
+          return;
         }
-    </script>
+        try {
+          const [proj, config, chars, history] = await Promise.all([
+            fetch(`/api/project/${this.selectedProject}`).then(r => r.json()),
+            fetch(`/api/project/${this.selectedProject}/config`).then(r => r.json()),
+              fetch(`/api/project/${this.selectedProject}/characters`).then(r => r.json()).catch(()=>([])),
+            fetch(`/api/project/${this.selectedProject}/chat-history`).then(r => r.json()),
+          ]);
+          this.currentProject = proj;
+          this.projectConfig = {
+            concept: config.concept || proj.concept || '',
+            visual_style: config.visual_style || '',
+            character_sheet_path: config.character_sheet_path || 'C:\\Users\\benha\\OneDrive\\03_CREATIVE\\Music\\My Ways of Songs\\_Assets\\Characters',
+            comfy_url: config.comfy_url || 'localhost:8000',
+            mode: config.mode || 'supervised',
+            ...config,
+          };
+          this.projectCharacters = chars || [];
+            this.chatMessages = (history || []).map(m => ({ role: m.role, content: m.content }));
+          this.$nextTick(() => this.scrollChatToBottom());
+        } catch (e) { console.error(e); }
+      },
+
+      async loadProject() {
+        return this.onProjectChange();
+      },
+
+      async saveProject() {
+        if (!this.currentProject) return;
+        try {
+          const res = await fetch(`/api/project/${this.selectedProject}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.currentProject)
+          });
+          if (res.ok) this.notify('Project saved');
+          else this.notify('Save failed', 'error');
+        } catch (e) { this.notify('Save error: ' + e.message, 'error'); }
+      },
+
+      async createProject() {
+        const name = prompt('New project name:');
+        if (!name) return;
+        const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+        try {
+          const res = await fetch('/api/project/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: safeName })
+          });
+          const data = await res.json();
+          if (data.success) {
+            await this.refreshProjects();
+            this.selectedProject = data.name;
+            await this.onProjectChange();
+            this.notify('Project created: ' + data.name);
+          } else {
+            this.notify(data.error, 'error');
+          }
+        } catch (e) { this.notify('Error: ' + e.message, 'error'); }
+      },
+
+      setMode(mode) {
+        this.projectConfig.mode = mode;
+        this.saveConfig();
+      },
+
+      // ── Config ─────────────────────────────────────────────────────────────
+
+      async saveConfig() {
+        if (!this.selectedProject) return;
+        try {
+          await fetch(`/api/project/${this.selectedProject}/config`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.projectConfig)
+          });
+          this.notify('Settings saved');
+        } catch (e) { this.notify('Error: ' + e.message, 'error'); }
+      },
+
+      // ── Chat ───────────────────────────────────────────────────────────────
+
+      async sendKodaPrompt(shot) {
+          let msg = "Please write detailed image and video prompts for shot " + shot.id + " (" + shot.name + "). Ensure you output the <action> tags to update the shot_list.json directly.";
+          
+          if (shot.image_file) {
+              msg = "Please write detailed image and video prompts for shot " + shot.id + " (" + shot.name + "). I have an existing plate image for this shot located at: " + shot.image_file + "\n\nPlease use your tools to 'read' or 'image' analyze that file path first, then write a detailed LTX 2.3 video prompt that perfectly matches the visual context of the image. Ensure you output the <action> tags to update the shot_list.json directly.";
+          }
+          
+          this.chatInput = msg;
+          setTimeout(() => this.sendChat(), 50);
+      },
+
+      async sendChat() {
+        if (!this.chatInput.trim() || !this.selectedProject || this.chatStreaming) return;
+        const userMsg = this.chatInput.trim();
+        this.chatInput = '';
+        this.chatMessages.push({ role: 'user', content: userMsg });
+        this.chatMessages.push({ role: 'assistant', content: '', pending: true });
+        const assistantIdx = this.chatMessages.length - 1;
+        this.chatStreaming = true;
+        this.$nextTick(() => this.scrollChatToBottom());
+
+        try {
+          const history = this.chatMessages.slice(0, -2).map(m => ({ role: m.role, content: m.content }));
+          const response = await fetch(`/api/project/${this.selectedProject}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: userMsg, history })
+          });
+
+          if (!response.ok) {
+            const err = await response.json();
+            this.chatMessages[assistantIdx].content = '⚠️ ' + (err.error || 'Server error');
+            this.chatMessages[assistantIdx].pending = false;
+            this.chatStreaming = false;
+            return;
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop();
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              try {
+                const msg = JSON.parse(line);
+                if (msg.type === 'delta') {
+                  this.chatMessages[assistantIdx].content += msg.text;
+                  this.scrollChatToBottom();
+                } else if (msg.type === 'state_update') {
+                  if (msg.config) Object.assign(this.projectConfig, msg.config);
+                  if (msg.shots && this.currentProject) {
+                    this.currentProject = { ...this.currentProject, shots: msg.shots };
+                  }
+                } else if (msg.type === 'done') {
+                  this.chatMessages[assistantIdx].pending = false;
+                } else if (msg.type === 'error') {
+                  this.chatMessages[assistantIdx].content = '⚠️ ' + msg.message;
+                  this.chatMessages[assistantIdx].pending = false;
+                }
+              } catch (_) {}
+            }
+          }
+        } catch (e) {
+          this.chatMessages[assistantIdx].content = '⚠️ ' + e.message;
+          this.chatMessages[assistantIdx].pending = false;
+        }
+        this.chatMessages[assistantIdx].pending = false;
+        this.chatStreaming = false;
+      },
+
+      clearChat() {
+        this.chatMessages = [];
+      },
+
+      scrollChatToBottom() {
+        const el = document.getElementById('chat-messages');
+        if (el) el.scrollTop = el.scrollHeight;
+      },
+
+      // ── Shots ──────────────────────────────────────────────────────────────
+
+      async addShot() {
+          if (!this.currentProject) return;
+          const shots = this.currentProject.shots || [];
+          const maxId = shots.reduce((m, s) => Math.max(m, s.id), 0);
+          shots.push({
+            id: maxId + 1,
+            name: `Shot ${String(maxId + 1).padStart(2, '0')}`,
+            duration: 10,
+            audio_file: '',
+            character_sheets: '',
+            image_prompt: '',
+            video_prompt: '',
+            status: 'pending',
+            image_file: null,
+            video_file: ''
+          });
+          this.currentProject = { ...this.currentProject, shots };
+          await this.saveProject();
+        },
+
+      async deleteShot(id) {
+          if (!this.currentProject) return;
+          this.currentProject = { ...this.currentProject, shots: this.currentProject.shots.filter(s => s.id !== id) };
+          await this.saveProject();
+        },
+
+      // ── Image Upload ───────────────────────────────────────────────────────
+
+      async uploadImage(shotId, event) {
+          await this.saveProject();
+          const file = event.target.files[0];
+          if (!file) return;
+          const formData = new FormData();
+          formData.append('image', file);
+          event.target.value = '';
+        try {
+          const res = await fetch(`/api/project/${this.selectedProject}/upload/${shotId}`, { method: 'POST', body: formData });
+          const data = await res.json();
+          if (data.success) {
+            const shot = this.currentProject.shots.find(s => s.id === shotId);
+            if (shot) shot.image_file = data.filePath;
+            this.notify('Image uploaded');
+          } else {
+            this.notify('Upload failed: ' + data.error, 'error');
+          }
+        } catch (e) { this.notify('Upload error', 'error'); }
+      },
+
+      async bulkUpload(event) {
+          const files = event.target.files;
+          if (!files.length) return;
+          const formData = new FormData();
+          for (const f of files) formData.append('images', f);
+          event.target.value = '';
+        this.notify(`Uploading ${files.length} images…`, 'info');
+        try {
+          const res = await fetch(`/api/project/${this.selectedProject}/bulk-upload`, { method: 'POST', body: formData });
+          const data = await res.json();
+          if (data.success) {
+            await this.onProjectChange();
+            this.notify(`Imported ${data.newShots.length} shots`);
+          } else {
+            this.notify(data.error, 'error');
+          }
+        } catch (e) { this.notify('Bulk upload error', 'error'); }
+      },
+
+      // ── ComfyUI Queue ──────────────────────────────────────────────────────
+
+      async queueShot(shotId) {
+        if (!this.selectedProject) return;
+        this.notify(`Queueing Shot ${shotId} (${this.videoModel.toUpperCase()})…`, 'info');
+        try {
+          const res = await fetch(`/api/project/${this.selectedProject}/queue-video/${shotId}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: this.videoModel })
+          });
+          const data = await res.json();
+          data.success ? this.notify(`Shot ${shotId} queued`) : this.notify(data.error, 'error');
+        } catch (e) { this.notify('Queue error', 'error'); }
+      },
+
+      async queueImage(shotId) {
+        if (!this.selectedProject) return;
+        this.notify(`Queueing image for Shot ${shotId}…`, 'info');
+        try {
+          const res = await fetch(`/api/project/${this.selectedProject}/queue-image/${shotId}`, { method: 'POST' });
+          const data = await res.json();
+          data.success ? this.notify('Image queued!') : this.notify(data.error, 'error');
+        } catch (e) { this.notify('Queue error', 'error'); }
+      },
+
+      async queueAudioVideo(shotId) {
+        if (!this.selectedAudio) return this.notify('Select an audio track first', 'error');
+        this.notify(`Queueing audio video for Shot ${shotId}…`, 'info');
+        try {
+          const res = await fetch(`/api/project/${this.selectedProject}/queue-audio-video/${shotId}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audioPath })
+          });
+          const data = await res.json();
+          data.success ? this.notify(`Shot ${shotId} audio queued`) : this.notify(data.error, 'error');
+        } catch (e) { this.notify('Error', 'error'); }
+      },
+
+      async generatePrompts(shotId = null) {
+        const msg = shotId ? `Generating prompts for Shot ${shotId}…` : 'Generating all prompts…';
+        this.notify(msg, 'info');
+        try {
+          const res = await fetch(`/api/project/${this.selectedProject}/generate-prompts`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shotId })
+          });
+          const data = await res.json();
+          if (data.success) { await this.onProjectChange(); this.notify(`Updated ${data.updated} shot(s)`); }
+          else this.notify(data.error || 'Failed', 'error');
+        } catch (e) { this.notify('Error: ' + e.message, 'error'); }
+      },
+
+      // ── Export ─────────────────────────────────────────────────────────────
+
+      async exportToDirector() {
+        if (!this.currentProject) return;
+        await this.saveProject();
+        try {
+          const res = await fetch(`/api/project/${this.selectedProject}/export`, { method: 'POST' });
+          const data = await res.json();
+          if (data.success) this.notify('Exported: ' + data.path);
+        } catch (e) { this.notify('Export error', 'error'); }
+      },
+
+      // ── Audio Tracks ───────────────────────────────────────────────────────
+
+      async loadAudioTracks() {
+          // Now relies on onProjectChange to fetch /api/project/:name/tracks
+        },
+
+      // ── Utilities ─────────────────────────────────────────────────────────
+
+      notify(msg, type = 'success', persist = false) {
+        if (this.notifTimer) clearTimeout(this.notifTimer);
+        this.notification = msg;
+        this.notifType = type;
+        if (!persist) this.notifTimer = setTimeout(() => { this.notification = ''; this.notifTimer = null; }, 4000);
+      },
+
+      resolvePath(absolutePath) {
+        if (!absolutePath) return '';
+        if (absolutePath.startsWith('/')) return absolutePath;
+        const norm = absolutePath.replace(/\\/g, '/');
+        const parts = norm.split('/projects/');
+        if (parts.length > 1) return `/projects-static/${parts[1]}`;
+        if (/^[A-Za-z]:\//.test(norm)) return `/api/file?path=${encodeURIComponent(absolutePath)}`;
+        return absolutePath;
+      },
+    }
+  }
+  </script>
+
+  <style>
+    /* Fix details arrow rotation */
+    details[open] .details-arrow { transform: rotate(90deg); }
+  </style>
 </body>
 </html>

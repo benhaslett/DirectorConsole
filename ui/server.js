@@ -270,28 +270,39 @@ function runOllamaVision(imagePath, prompt) {
 }
 
 // Helper: Ollama text generation
-function runOllamaText(prompt) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('ollama', ['run', 'qwen3:8b'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: true
+async function runOllamaText(prompt) {
+    const openclawConfigPath = require('path').resolve(require('os').homedir(), '.openclaw', 'openclaw.json');
+    let gatewayToken = '', gatewayPort = 18789;
+    if (fs.existsSync(openclawConfigPath)) {
+      try {
+        const oc = JSON.parse(fs.readFileSync(openclawConfigPath, 'utf8'));
+        gatewayPort = oc.gateway?.port || 18789;
+        const rawContent = fs.readFileSync(openclawConfigPath, 'utf8');
+        const tokenMatch = rawContent.match(/"token"\s*:\s*"([a-f0-9]{48})"/);
+        if (tokenMatch && tokenMatch[1]) gatewayToken = tokenMatch[1];
+      } catch(e) {}
+    }
+
+    const payload = {
+      model: 'qwen-portal/coder-model',
+      messages: [{role: 'user', content: prompt}],
+      stream: false
+    };
+
+    const resp = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${gatewayToken}`,
+        'x-openclaw-scopes': 'operator.read,operator.write,operator.admin'
+      },
+      body: JSON.stringify(payload)
     });
 
-    let data = '';
-    let error = '';
-
-    proc.stdout.on('data', (chunk) => { data += chunk.toString(); });
-    proc.stderr.on('data', (chunk) => { error += chunk.toString(); });
-
-    proc.stdin.write(prompt);
-    proc.stdin.end();
-
-    proc.on('close', (code) => {
-      if (code !== 0 && data.trim().length === 0) return reject(new Error(error));
-      resolve(data);
-    });
-  });
-}
+    if (!resp.ok) throw new Error(`Gateway returned ${resp.status}`);
+    const data = await resp.json();
+    return data.choices[0].message.content;
+  }
 
 // 7. Auto-Generate Prompts (AI)
 app.post('/api/project/:name/generate-prompts', async (req, res) => {
@@ -329,13 +340,13 @@ Project Concept: "${concept}"
 Shot Name: "${shot.name}"
 Visual Analysis: "${visualContext}"
 
-Write a video_prompt for Wan 2.2 i2v. Rules:
-- Single flowing paragraph, 3-5 sentences
-- Start with camera movement (e.g. "Camera slowly pushes in,")
-- Describe subject motion and atmosphere
-- No internal states — use visual cues only
-- No text or logos
-- End with lighting/mood note
+Write a video_prompt for LTX 2.3 i2v. Rules:
+  - Single flowing paragraph, 4-8 sentences. Present tense.
+  - Start with shot scale and scene (lighting, color, textures).
+  - Describe core action flowing naturally.
+  - Explicit camera language (pans left, pushes in).
+  - Avoid internal states - use visual cues only. No text/logos.
+  - Audio description can be included.
 
 Also write an image_prompt for Flux/SDXL (static frame, detailed, cinematic).
 
@@ -370,8 +381,9 @@ function comfyUploadImage(imagePath) {
   return new Promise((resolve, reject) => {
     const boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
     const filename = path.basename(imagePath);
-    const fileStream = fs.createReadStream(imagePath);
-    const req = http.request({
+      const ext = path.extname(filename).toLowerCase();
+      const fileStream = fs.createReadStream(imagePath);
+      const req = http.request({
       hostname: '127.0.0.1', port: 8000, path: '/upload/image', method: 'POST',
       headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` }
     }, (res) => {
@@ -386,7 +398,8 @@ function comfyUploadImage(imagePath) {
       });
     });
     req.on('error', reject);
-    req.write(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${filename}"\r\nContent-Type: image/png\r\n\r\n`);
+    const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : 'image/png';
+      req.write(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`);
     fileStream.pipe(req, { end: false });
     fileStream.on('end', () => {
       req.write(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="overwrite"\r\n\r\ntrue\r\n--${boundary}--\r\n`);
@@ -447,10 +460,17 @@ app.post('/api/project/:name/queue-video/:shotId', async (req, res) => {
       workflow = JSON.parse(fs.readFileSync(workflowFile, 'utf8'));
       
       const uploadedName = await comfyUploadImage(shot.image_file);
-      
-      // Inject LTX inputs
-      if (workflow['269']) workflow['269'].inputs.image = uploadedName; // LoadImage
-      if (workflow['267:266']) workflow['267:266'].inputs.value = prompt; // Prompt Gen
+        
+        // Reverted audio bypass as CreateVideo requires the audio stream and fails without it.
+
+        // Inject LTX inputs
+        if (workflow['269']) workflow['269'].inputs.image = uploadedName; // LoadImage
+        if (workflow['267:266']) workflow['267:266'].inputs.value = prompt; // Prompt Gen
+        
+        // Inject Duration (default to 24fps, duration in seconds * 24 + 1)
+        const durationSecs = shot.duration || 10;
+        const frameCount = Math.floor(durationSecs * 24) + 1;
+        if (workflow['267:225']) workflow['267:225'].inputs.value = frameCount;
       
       const seed = Math.floor(Math.random() * 1000000000000000);
       if (workflow['267:216']) workflow['267:216'].inputs.noise_seed = seed;
@@ -505,10 +525,12 @@ app.post('/api/project/:name/queue-image/:shotId', async (req, res) => {
     const scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/generate_zturbo.js');
     console.log(`[Queue Image] Shot ${shotId}: node ${scriptPath}`);
 
-    const child = spawn('node', [scriptPath, shot.image_prompt, '--preset', 'ascension'], {
-      detached: true,
-      stdio: 'ignore'
-    });
+    const args = [scriptPath, shot.image_prompt, '--preset', 'ascension'];
+      if (shot.character_sheets) args.push('--character', shot.character_sheets);
+      const child = spawn('node', args, {
+        detached: true,
+        stdio: 'ignore'
+      });
     child.unref();
 
     res.json({ success: true, message: `Image queued for Shot ${shotId}` });
@@ -519,17 +541,20 @@ app.post('/api/project/:name/queue-image/:shotId', async (req, res) => {
 });
 
 // 10. List available audio tracks
-app.get('/api/tracks', (req, res) => {
-  const trackDirs = [
+app.get('/api/project/:name/tracks', (req, res) => {
+  const config = getProjectConfig(req.params.name);
+  const trackDirs = config.audio_path ? [config.audio_path] : [
     'C:\\Users\\benha\\OneDrive\\03_CREATIVE\\Music\\My Ways of Songs\\Static Weather\\tracks',
     'C:\\Users\\benha\\OneDrive\\03_CREATIVE\\Music\\My Ways of Songs'
   ];
   const tracks = [];
   trackDirs.forEach(dir => {
     if (fs.existsSync(dir)) {
-      fs.readdirSync(dir)
-        .filter(f => f.match(/\.(wav|mp3|flac|aiff|ogg)$/i))
-        .forEach(f => tracks.push({ name: f, path: path.join(dir, f) }));
+      try {
+        fs.readdirSync(dir)
+          .filter(f => f.match(/\.(wav|mp3|flac|aiff|ogg)$/i))
+          .forEach(f => tracks.push({ name: f, path: path.join(dir, f) }));
+      } catch(e) {}
     }
   });
   res.json(tracks);
@@ -559,10 +584,12 @@ app.post('/api/project/:name/queue-audio-video/:shotId', async (req, res) => {
     const scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/animate_ltx23_audio.js');
     console.log(`[Queue Audio Video] Shot ${shotId} + audio: ${path.basename(audioPath)}`);
 
-    const child = spawn('node', [scriptPath, shot.image_file, audioPath, prompt], {
-      detached: true,
-      stdio: 'ignore'
-    });
+    const args = [scriptPath, shot.image_file, audioPath, prompt, (shot.duration || 10).toString()];
+      if (shot.character_sheets) args.push('--character', shot.character_sheets);
+      const child = spawn('node', args, {
+        detached: true,
+        stdio: 'ignore'
+      });
     child.unref();
 
     res.json({ success: true, message: `Audio video queued for Shot ${shotId}: "${shot.name}"` });
@@ -587,8 +614,258 @@ app.get('/api/file', (req, res) => {
   res.sendFile(path.resolve(filePath));
 });
 
+// ======= KODA CO-PILOT INTEGRATION ===========================================
+
+const DEFAULT_CHAR_PATH = 'C:\\Users\\benha\\OneDrive\\03_CREATIVE\\Music\\My Ways of Songs\\_Assets\\Characters';
+
+// Merge config.json + shot_list.json.concept into a single config object
+function getProjectConfig(projectName) {
+  const projectDir = path.join(PROJECTS_DIR, projectName);
+  const configPath = path.join(projectDir, 'config.json');
+  const slPath = path.join(projectDir, 'shot_list.json');
+  const config = fs.existsSync(configPath)
+    ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    : {};
+  if (!config.concept && fs.existsSync(slPath)) {
+    config.concept = JSON.parse(fs.readFileSync(slPath, 'utf8')).concept || '';
+  }
+  return config;
+}
+
+function buildKodaSystemPrompt(config, shots) {
+  const shotLines = shots.map(s =>
+    `  [${String(s.id).padStart(2, '0')}] "${s.name}" (${s.status}) — ${(s.image_prompt || '').slice(0, 80)}${(s.image_prompt || '').length > 80 ? '…' : ''}`
+  ).join('\n') || '  (no shots yet)';
+
+  return `You are Koda, an embedded creative co-pilot inside the Director video production tool. You help Ben develop cinematic shot lists, image prompts, and video prompts for his projects.
+
+## Current Project State
+- **Name:** ${config.name || 'Untitled'}
+- **Concept:** ${config.concept || '(not set)'}
+- **Visual Style:** ${config.visual_style || '(not set)'}
+- **Character Sheet:** ${config.character_sheet_path || DEFAULT_CHAR_PATH}\n  - **Audio Path:** ${config.audio_path || '(not set)'}
+- **Mode:** ${config.mode || 'supervised'}
+- **${shots.length} Shot(s):**
+${shotLines}
+
+## Direct State Manipulation
+Embed action tags in your response to update the project. They are silently parsed — do NOT describe the tags, just include them.
+
+<action>{"type":"update_shot","id":1,"field":"video_prompt","value":"..."}</action>
+<action>{"type":"update_shot","id":1,"field":"image_prompt","value":"..."}</action>
+<action>{"type":"update_shot","id":1,"field":"name","value":"..."}</action>
+<action>{"type":"add_shot","name":"Shot 02","image_prompt":"...","video_prompt":"...","duration":8}</action>
+<action>{"type":"update_project","field":"concept","value":"..."}</action>
+<action>{"type":"update_project","field":"visual_style","value":"..."}</action>
+
+Multiple action tags applied in order.
+
+## Prompt Guidelines
+- **Video prompts (LTX 2.3) Rules:**
+    1. Single flowing paragraph (4 to 8 sentences). Present tense.
+    2. Establish shot scale and scene (lighting, color, textures, mood).
+    3. Describe the core action flowing naturally from beginning to end.
+    4. Define characters (age, styling, emotion via physical cues).
+    5. Identify camera language (follows, pans left, pushes in, handheld). Describe how objects look *after* the camera moves.
+    6. Include Audio/Dialogue (e.g. Woman: "Stop being so dramatic").
+    7. Avoid internal states ("sad") - use physical cues. Avoid text/logos. Do not mix conflicting lighting.
+  - **Image prompts:** Composition, lighting, mood, subject placement. Cinematic still (match video style).
+  - Be direct, use cinematic terminology. Think like a Director of Photography.`;
+}
+
+function applyKodaActions(shots, config, actions) {
+  const SHOT_FIELDS = ['name', 'image_prompt', 'video_prompt', 'duration', 'audio_file', 'character_sheets'];
+  const CONFIG_FIELDS = ['concept', 'visual_style', 'character_sheet_path', 'audio_path', 'mode'];
+  for (const action of actions) {
+    if (action.type === 'update_shot') {
+      const shot = shots.find(s => s.id === action.id);
+      if (shot && SHOT_FIELDS.includes(action.field)) shot[action.field] = action.value;
+    } else if (action.type === 'add_shot') {
+      const maxId = shots.reduce((m, s) => Math.max(m, s.id), 0);
+      shots.push({
+        id: maxId + 1,
+        name: action.name || `Shot ${String(maxId + 1).padStart(2, '0')}`,
+        duration: action.duration || 10,
+        image_prompt: action.image_prompt || '',
+        video_prompt: action.video_prompt || '',
+        status: 'pending',
+        image_file: null,
+        video_file: ''
+      });
+    } else if (action.type === 'update_project') {
+      if (CONFIG_FIELDS.includes(action.field)) config[action.field] = action.value;
+    }
+  }
+  return { shots, config };
+}
+
+// GET /api/project/:name/config
+app.get('/api/project/:name/config', (req, res) => {
+  const projectDir = path.join(PROJECTS_DIR, req.params.name);
+  if (!fs.existsSync(projectDir)) return res.status(404).json({ error: 'Not found' });
+  res.json(getProjectConfig(req.params.name));
+});
+
+// POST /api/project/:name/config — save/merge fields
+app.post('/api/project/:name/config', (req, res) => {
+  const projectDir = path.join(PROJECTS_DIR, req.params.name);
+  if (!fs.existsSync(projectDir)) return res.status(404).json({ error: 'Not found' });
+  const configPath = path.join(projectDir, 'config.json');
+  const existing = fs.existsSync(configPath)
+    ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+  const updated = { ...existing, ...req.body };
+  fs.writeFileSync(configPath, JSON.stringify(updated, null, 2));
+  // Keep shot_list.json.concept in sync
+  if (req.body.concept !== undefined) {
+    const slPath = path.join(projectDir, 'shot_list.json');
+    if (fs.existsSync(slPath)) {
+      const sl = JSON.parse(fs.readFileSync(slPath, 'utf8'));
+      sl.concept = req.body.concept;
+      fs.writeFileSync(slPath, JSON.stringify(sl, null, 2));
+    }
+  }
+  res.json({ success: true, config: updated });
+});
+
+// GET /api/project/:name/chat-history
+// 11. List available character sheets
+app.get('/api/project/:name/characters', (req, res) => {
+  const config = getProjectConfig(req.params.name);
+  const charDir = config.character_sheet_path || DEFAULT_CHAR_PATH;
+  const chars = [];
+  if (fs.existsSync(charDir)) {
+    try {
+      fs.readdirSync(charDir)
+        .filter(f => f.match(/\.(png|jpg|jpeg|webp)$/i))
+        .forEach(f => chars.push({ name: f, path: path.join(charDir, f) }));
+    } catch(e) {}
+  }
+  res.json(chars);
+});
+
+app.get('/api/project/:name/chat-history', (req, res) => {
+  const histPath = path.join(PROJECTS_DIR, req.params.name, 'chat_history.json');
+  if (!fs.existsSync(histPath)) return res.json([]);
+  try { res.json(JSON.parse(fs.readFileSync(histPath, 'utf8'))); }
+  catch (_) { res.json([]); }
+});
+
+// POST /api/project/:name/chat — streaming NDJSON via Anthropic SDK
+app.post('/api/project/:name/chat', async (req, res) => {
+  const projectName = req.params.name;
+  const { message, history } = req.body;
+
+  let gatewayToken = '', gatewayPort = 18789;
+  const ocConfigPath = require('path').resolve(require('os').homedir(), '.openclaw', 'openclaw.json');
+  if (fs.existsSync(ocConfigPath)) {
+    try {
+      const oc = JSON.parse(fs.readFileSync(ocConfigPath, 'utf8'));
+      gatewayPort = oc.gateway?.port || 18789;
+    } catch(e) {}
+    try {
+      const rawContent = fs.readFileSync(ocConfigPath, 'utf8');
+      const tokenMatch = rawContent.match(/"token"\s*:\s*"([a-f0-9]{48})"/);
+      if (tokenMatch && tokenMatch[1]) {
+        gatewayToken = tokenMatch[1];
+      }
+    } catch(e) {}
+  }
+
+  const projectDir = path.join(PROJECTS_DIR, projectName);
+  if (!fs.existsSync(projectDir)) return res.status(404).json({ error: 'Project not found' });
+
+  const slPath = path.join(projectDir, 'shot_list.json');
+  const config = getProjectConfig(projectName);
+  const shotList = fs.existsSync(slPath) ? JSON.parse(fs.readFileSync(slPath, 'utf8')) : { shots: [] };
+  const shots = shotList.shots || [];
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const send = (obj) => res.write(JSON.stringify(obj) + '\n');
+  const messages = [...(history || []), { role: 'user', content: message }];
+
+  try {
+    let fullText = '';
+    
+    const sysPrompt = buildKodaSystemPrompt(config, shots);
+    const payload = {
+      model: 'openclaw', // Route to openclaw main agent
+      messages: [{role: 'system', content: sysPrompt}, ...messages],
+      stream: true
+    };
+    
+    const resp = await fetch(`http://127.0.0.1:${gatewayPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${gatewayToken}`, 'x-openclaw-scopes': 'operator.read,operator.write,operator.admin'
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!resp.ok) {
+      throw new Error(`Gateway returned ${resp.status}: ${await resp.text()}`);
+    }
+    
+    const { Readable } = require('stream');
+    const { createInterface } = require('readline');
+    const bodyStream = resp.body.getReader ? Readable.fromWeb(resp.body) : resp.body;
+    const rl = createInterface({ input: bodyStream });
+    for await (const line of rl) {
+      if (line.startsWith('data: ')) {
+        const dataStr = line.slice(6);
+        if (dataStr === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(dataStr);
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) {
+            fullText += content;
+            send({ type: 'delta', text: content });
+          }
+        } catch(e) {}
+      }
+    }
+      // Parse and apply actions
+
+    const actionRe = /<action>([\s\S]*?)<\/action>/g;
+    const actions = [];
+    let m;
+    while ((m = actionRe.exec(fullText)) !== null) {
+      try { actions.push(JSON.parse(m[1].trim())); } catch (_) { /* malformed */ }
+    }
+
+    if (actions.length > 0) {
+      const result = applyKodaActions(shots.map(s => ({ ...s })), { ...config }, actions);
+      shotList.shots = result.shots;
+      if (result.config.concept !== undefined) shotList.concept = result.config.concept;
+      fs.writeFileSync(slPath, JSON.stringify(shotList, null, 2));
+      const configPath = path.join(projectDir, 'config.json');
+      fs.writeFileSync(configPath, JSON.stringify(result.config, null, 2));
+      send({ type: 'state_update', config: result.config, shots: result.shots });
+    }
+
+    // Save chat history (clean action tags from stored text)
+    const cleanText = fullText.replace(/<action>[\s\S]*?<\/action>/g, '').trim();
+    const histPath = path.join(projectDir, 'chat_history.json');
+    fs.writeFileSync(histPath, JSON.stringify([...messages, { role: 'assistant', content: cleanText }], null, 2));
+
+    send({ type: 'done' });
+    res.end();
+  } catch (err) {
+    console.error('[Chat Error]', err.message);
+    send({ type: 'error', message: err.message });
+    res.end();
+  }
+});
+
+// =============================================================================
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`Director UI running at http://localhost:${PORT}`);
   console.log(`Projects dir: ${PROJECTS_DIR}`);
+  if (!process.env.ANTHROPIC_API_KEY) console.warn('[!] ANTHROPIC_API_KEY not set — chat unavailable');
 });
