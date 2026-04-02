@@ -465,7 +465,12 @@ app.post('/api/project/:name/queue-video/:shotId', async (req, res) => {
 
         // Inject LTX inputs
         if (workflow['269']) workflow['269'].inputs.image = uploadedName; // LoadImage
-        if (workflow['267:266']) workflow['267:266'].inputs.value = prompt; // Prompt Gen
+          if (workflow['267:266']) workflow['267:266'].inputs.value = prompt; // Prompt Gen
+          
+          // Bypass TextGenerateLTX2Prompt so Comfy uses EXACTLY our prompt without Florence/LLM rewriting it
+          if (workflow['267:240']) {
+              workflow['267:240'].inputs.text = ["267:266", 0];
+          }
         
         // Inject Duration (default to 24fps, duration in seconds * 24 + 1)
         const durationSecs = shot.duration || 10;
@@ -522,7 +527,10 @@ app.post('/api/project/:name/queue-image/:shotId', async (req, res) => {
     if (!shot) return res.status(404).json({ error: "Shot not found" });
     if (!shot.image_prompt) return res.status(400).json({ error: "No image prompt" });
 
-    const scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/generate_zturbo.js');
+    let scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/generate_zturbo.js');
+      if (shot.character_sheets) {
+        scriptPath = path.resolve(__dirname, '../../comfy-art/scripts/generate_ipadapter.js');
+      }
     console.log(`[Queue Image] Shot ${shotId}: node ${scriptPath}`);
 
     const args = [scriptPath, shot.image_prompt, '--preset', 'ascension'];
